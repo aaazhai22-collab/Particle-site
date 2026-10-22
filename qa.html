@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="zh-CN">
+<head><meta charset="UTF-8"/><meta name="viewport" content="width=device-width, initial-scale=1.0"/><title>粒子工坊 · 浏览器实测</title>
+<style>
+*{box-sizing:border-box}body{margin:0;padding:24px;background:#111118;color:#dedee8;font:14px/1.7 'Microsoft YaHei',sans-serif}main{max-width:1200px;margin:auto}h1{font-size:23px;margin:0 0 8px}p{color:#aaaabd;margin:6px 0 16px}button{background:#d5f7a1;color:#222c18;padding:12px 20px;border:0;border-radius:7px;font:inherit;cursor:pointer}button:disabled{opacity:.5;cursor:wait}#status{padding:12px 0;color:#d5f7a1}#stage{width:100%;height:430px;background:#05060a;display:flex;align-items:center;justify-content:center;overflow:hidden;border:1px solid #373741;border-radius:8px}#stage canvas{max-width:100%;max-height:100%}pre{background:#1b1b25;padding:16px;border-radius:8px;overflow:auto;color:#bdbdd0;font:12px/1.7 monospace;white-space:pre-wrap}video{width:100%;max-height:480px;background:#05060a;border-radius:8px;margin-top:16px}a{color:#d5f7a1}
+</style></head>
+<body><main><h1>第一阶段 · 真实浏览器渲染与录像测试</h1><p>点击后先测约 4 秒编辑渲染，再录制至少 10.5 秒。使用真实 WebGL 和 MediaRecorder；结果保存在本项目 artifacts 文件夹。请保持此页面可见，避免后台节流。</p><button id="run">运行真实浏览器测试并保存录像</button><div id="status">等待运行。开发测试页面不进入产品生产入口。</div><div id="stage"></div><video id="video" controls playsinline hidden></video><div id="links"></div><pre id="report">测试尚未运行；不预填 FPS 或硬件信息。</pre></main>
+<script type="module">
+import { ParticleEngine } from '/src/ParticleEngine.ts';
+import { CanvasRecorder } from '/src/CanvasRecorder.ts';
+
+const button = document.querySelector('#run');
+const status = document.querySelector('#status');
+const reportEl = document.querySelector('#report');
+const stage = document.querySelector('#stage');
+const video = document.querySelector('#video');
+const links = document.querySelector('#links');
+let engine = null;
+let recorder = null;
+let running = false;
+let stopTimer = null;
+let sampleTimer = null;
+const wait = milliseconds => new Promise(resolve => setTimeout(resolve, milliseconds));
+const average = values => values.length ? values.reduce((total, value) => total + value, 0) / values.length : null;
+const message = text => { status.textContent = text; };
+const cleanup = () => { if (stopTimer) clearTimeout(stopTimer); if (sampleTimer) clearInterval(sampleTimer); recorder?.destroy(); engine?.destroy(); recorder = null; engine = null; };
+window.addEventListener('beforeunload', cleanup);
+
+button.addEventListener('click', async () => {
+  if (running || !import.meta.env.DEV) return;
+  running = true; button.disabled = true; cleanup(); links.replaceChildren(); video.hidden = true; video.removeAttribute('src');
+  const started = new Date();
+  const editSamples = [];
+  const recordSamples = [];
+  let phase = 'warmup';
+  let latestState = { fps: 0, progress: 0, running: false };
+  let report = null;
+  try {
+    message('正在初始化真实 GPU 粒子场景…');
+    engine = new ParticleEngine(stage, state => { latestState = state; }, error => message(error));
+    engine.setEffect('vortex');
+    engine.setParams({ count: 30000, autoRotate: true, rotationSpeed: 0.5, fade: false, duration: 3, playbackRate: 1 });
+    engine.setProgress(1); engine.fitView(); engine.setProgress(0); engine.command('loop');
+    const context = engine.canvas.getContext('webgl2') || engine.canvas.getContext('webgl');
+    let gpu = { renderer: '未知', vendor: '未知', version: '未知' };
+    if (context) {
+      const extension = context.getExtension('WEBGL_debug_renderer_info');
+      gpu = { renderer: context.getParameter(extension ? extension.UNMASKED_RENDERER_WEBGL : context.RENDERER), vendor: context.getParameter(extension ? extension.UNMASKED_VENDOR_WEBGL : context.VENDOR), version: context.getParameter(context.VERSION) };
+    }
+    report = {
+      test: 'stage-1-real-browser-render-and-canvas-recording', startedAt: started.toISOString(),
+      environment: { userAgent: navigator.userAgent, platform: navigator.platform, hardwareConcurrency: navigator.hardwareConcurrency, deviceMemoryGB: navigator.deviceMemory ?? null, gpu, viewport: { width: innerWidth, height: innerHeight }, devicePixelRatio },
+      configuration: { particleCount: 30000, effect: 'vortex', params: engine.params, output: { width: engine.canvas.width, height: engine.canvas.height, targetFPS: 30 }, encodingQuality: 'high', requestedBitrate: 12000000, audio: false },
+      samples: { editingRenderFPS: editSamples, recordingRenderFPS: recordSamples },
+      notes: ['FPS 样本取自 ParticleEngine 的约 1 秒平均渲染帧率。', '渲染 FPS 与视频编码帧率不同；编码帧率需另行检查保存的视频。', '本次仅验证短时编辑与 10.5 秒录像，不等于 5 分钟或压力测试。'],
+    };
+    sampleTimer = setInterval(() => {
+      if (latestState.fps <= 0) return;
+      if (phase === 'edit') editSamples.push(latestState.fps);
+      if (phase === 'record') recordSamples.push(latestState.fps);
+      if (report) reportEl.textContent = JSON.stringify({ ...report, currentPhase: phase, currentRenderFPS: latestState.fps, progress: latestState.progress }, null, 2);
+    }, 1000);
+    await wait(1200); phase = 'edit'; message('正在测编辑渲染帧率：30,000 粒子 / 旋涡往返 / 柔光 / 自动环绕…');
+    await wait(4000);
+    message('正在录制：720p，目标 30 FPS，高画质，至少 10.5 秒…');
+    const result = await new Promise((resolve, reject) => {
+      recorder = new CanvasRecorder(engine.canvas, state => {
+        if (state.status === 'ready' && state.result) resolve(state.result);
+        if (state.status === 'error') reject(new Error(state.error || '真实浏览器录像失败。'));
+        if (state.status === 'recording') message(`正在录制 ${state.elapsed.toFixed(1)} 秒 · 实测渲染 ${latestState.fps} FPS`);
+        if (state.status === 'processing') { phase = 'processing'; message('正在收集最终录像数据并生成文件…'); }
+      });
+      if (!recorder.supported) return reject(new Error('当前真实浏览器不支持画布录制。'));
+      phase = 'record'; recorder.start('high');
+      stopTimer = setTimeout(() => recorder?.stop(), 10500);
+    });
+    phase = 'saving'; clearInterval(sampleTimer); sampleTimer = null;
+    engine.setRunning(false);
+    const post = async (path, body, type) => {
+      const response = await fetch(path, { method: 'POST', headers: { 'Content-Type': type, 'X-Particle-QA': '1' }, body });
+      const value = await response.json();
+      if (!response.ok) throw new Error(value.error || `保存失败 ${response.status}`);
+      return value;
+    };
+    message('正在将真实录像和实测报告保存到本地项目…');
+    const saved = await post('/__qa/video', result.blob, result.mimeType);
+    Object.assign(report, {
+      completedAt: new Date().toISOString(),
+      measurements: { editingRenderFPSAverage: average(editSamples), recordingRenderFPSAverage: average(recordSamples), editingSampleCount: editSamples.length, recordingSampleCount: recordSamples.length },
+      recording: { effectiveDurationSeconds: result.duration, width: result.width, height: result.height, mimeType: result.mimeType, extension: result.extension, bytes: result.blob.size, savedPath: saved.path, videoEncodingFPS: '待 ffprobe 检查真实文件' },
+    });
+    const savedReport = await post('/__qa/report', JSON.stringify(report), 'application/json');
+    video.src = `/__qa/video?run=${Date.now()}`; video.hidden = false; video.load();
+    for (const [label, url] of [['打开保存的视频', saved.url], ['打开实测报告', savedReport.url]]) { const anchor = document.createElement('a'); anchor.href = url; anchor.textContent = label; anchor.style.marginRight = '18px'; anchor.target = '_blank'; links.append(anchor); }
+    reportEl.textContent = JSON.stringify(report, null, 2);
+    message(`测试完成：录像 ${result.duration.toFixed(2)} 秒，${result.width} × ${result.height}，${result.extension.toUpperCase()}，已保存到 ${saved.path}。`);
+  } catch (error) {
+    message(`测试失败：${error instanceof Error ? error.message : String(error)}`);
+    if (report) reportEl.textContent = JSON.stringify({ ...report, error: String(error) }, null, 2);
+    if (sampleTimer) clearInterval(sampleTimer); sampleTimer = null;
+    if (stopTimer) clearTimeout(stopTimer); stopTimer = null;
+    engine?.setRunning(false);
+  } finally { running = false; button.disabled = false; button.textContent = '重新运行真实浏览器测试'; }
+});
+if (!import.meta.env.DEV) { button.disabled = true; message('此页面仅供本地开发验证，不是产品入口。'); }
+</script></body></html>

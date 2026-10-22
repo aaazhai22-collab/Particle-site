@@ -1,0 +1,70 @@
+<!doctype html><html lang="zh-CN"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>粒子工作台 · 升级验证</title><style>
+body{margin:0;padding:20px;background:#111118;color:#d8d8e3;font:13px/1.7 'Microsoft YaHei',sans-serif}main{max-width:1100px;margin:auto}h1{font-size:20px;margin:0}p{color:#9898ac}button{padding:10px 18px;background:#d5f7a1;color:#26351a;border:0;border-radius:5px;cursor:pointer}button:disabled{opacity:.5}#stage{display:flex;align-items:center;justify-content:center;background:#000;height:330px;margin-top:14px}#stage canvas{max-width:100%}pre{white-space:pre-wrap;background:#1d1d29;padding:15px;font:11px/1.6 monospace}video{width:100%;max-height:400px}#status{color:#d5f7a1;margin:10px 0}
+</style></head><body><main><h1>V0.2 · 导入、流场、关键帧与录像实测</h1><p>测试正常与错误素材、20 次替换、10 秒以上录像和 5 分钟循环。测试中保持此页可见，结果写入本地 artifacts。</p><button id="run">运行升级验证</button><div id="status">待运行</div><div id="stage"></div><video id="video" controls hidden></video><pre id="report">尚无结果</pre></main><script type="module">
+import { ParticleEngine } from '/src/ParticleEngine.ts';
+import { CanvasRecorder } from '/src/CanvasRecorder.ts';
+import { loadParticleAsset } from '/src/assets.ts';
+const ui={status:document.querySelector('#status'),report:document.querySelector('#report'),run:document.querySelector('#run'),video:document.querySelector('#video')};
+const wait=ms=>new Promise(resolve=>setTimeout(resolve,ms));
+const mean=a=>a.reduce((s,v)=>s+v,0)/Math.max(1,a.length);
+const file=async(name)=>{const response=await fetch('/examples/'+name);if(!response.ok)throw new Error('读取测试文件失败 '+name);return new File([await response.blob()],name);};
+let engine,recorder;
+window.addEventListener('beforeunload',()=>{recorder?.destroy();engine?.destroy();});
+ui.run.addEventListener('click',async()=>{
+ if(!import.meta.env.DEV)return;ui.run.disabled=true;
+ const report={test:'v0.2-import-flow-keyframes-record-stability',startedAt:new Date().toISOString(),checks:[],editingFPS:[],recordingFPS:[],imports:[],stability:[]};
+ const check=(name,pass,detail)=>{report.checks.push({name,pass,detail});if(!pass)throw new Error(name+': '+detail);};
+ const display=text=>{ui.status.textContent=text;ui.report.textContent=JSON.stringify(report,null,2);};
+ const save=async(path,body,type)=>{const response=await fetch(path,{method:'POST',headers:{'Content-Type':type,'X-Particle-QA':'1'},body});if(!response.ok)throw new Error('保存报告失败');return response.json();};
+ const hash=async()=>{const blob=await engine.screenshot();const buffer=await crypto.subtle.digest('SHA-256',await blob.arrayBuffer());return [...new Uint8Array(buffer)].map(x=>x.toString(16).padStart(2,'0')).join('');};
+ try{
+  engine=new ParticleEngine(document.querySelector('#stage'),()=>{},message=>{throw new Error(message);});
+  engine.setRunning(false);
+  const gl=engine.canvas.getContext('webgl2');const ext=gl.getExtension('WEBGL_debug_renderer_info');
+  report.environment={browser:navigator.userAgent,cpuThreads:navigator.hardwareConcurrency,deviceMemoryGB:navigator.deviceMemory??null,gpu:gl.getParameter(ext?ext.UNMASKED_RENDERER_WEBGL:gl.RENDERER),viewport:[innerWidth,innerHeight],output:[engine.canvas.width,engine.canvas.height]};
+  display('检查图片和模型导入…');
+  const flower=await loadParticleAsset(await file('color-flower.png'));const model=await loadParticleAsset(await file('sample-sphere.glb'));const texture=await loadParticleAsset(await file('texture-plane.glb'));const jpg=await loadParticleAsset(await file('sample-background.jpg'));const reference=await loadParticleAsset(await file('particle-flower-reference.jpg'));
+  check('透明花朵原色与平面',flower.hasOriginalColors&&flower.positions.every((v,i)=>i%3!==2||v===0),flower.count+'个采样池');
+  check('模型多网格三维与原色',model.hasOriginalColors&&model.positions.some((v,i)=>i%3===2&&Math.abs(v)>.01),model.notes);
+  const textureColors=new Set();for(let i=0;i<texture.colors.length;i+=3)textureColors.add([texture.colors[i],texture.colors[i+1],texture.colors[i+2]].map(v=>Math.round(v)).join(','));
+  check('内嵌贴图四色解码',textureColors.size===4,[...textureColors]);check('JPG背景采样',jpg.count===100000,jpg.count);
+  for(const name of ['fully-transparent.png','corrupt-image.png','corrupt-model.glb','no-static-mesh.glb']){let error='';try{await loadParticleAsset(await file(name));}catch(e){error=e.message;}check(name+'中文错误',/[\u3400-\u9fff]/.test(error),error);}
+  try{await loadParticleAsset(new File(['bad'],'unsupported.svg'));check('格式过滤',false,'SVG不应通过');}catch(e){check('格式过滤',e.message.includes('不支持'),e.message);}
+  check('用户参考JPG可直接展示',reference.count===100000&&reference.hasOriginalColors,reference.name);
+  engine.setAsset(reference);engine.setParams({count:80000,colorMode:'original',size:2.2,opacity:.95,glow:.55,trail:.45,fade:true,spread:1.1,turbulence:.18,erosion:.72,flowScale:1.5,stringiness:1.55,motionSpeed:.7,direction:'y'});engine.setProgress(0);
+  report.configuration={effect:'erosion',params:engine.params,particleCount:engine.state.actualCount,trailParticleCap:20000};
+  const original=await hash();const effectHashes=[];
+  for(const effect of ['radial','noise','vortex','directional','wave','erosion']){engine.setProgress(0);engine.setEffect(effect);engine.setProgress(.55);effectHashes.push(await hash());}
+  check('六种效果渲染不同',new Set(effectHashes).size===6,effectHashes);
+  engine.setProgress(1);const faded=await hash();engine.setParams({opacity:0});const blank=await hash();check('末段粒子与拖尾全部淡出',faded===blank,faded);engine.setParams({opacity:.95});
+  engine.setProgress(0);check('反向聚合精确还原',await hash()===original,'PNG SHA-256 字节一致');
+  const clip={duration:10,keyframes:[{id:'start',time:0,scale:1,rotation:[0,0,0],progress:0},{id:'middle',time:5,scale:1.3,rotation:[0,45,20],progress:1},{id:'end',time:10,scale:1,rotation:[0,360,0],progress:0}]};
+  engine.setTimeline(clip);engine.seekTimeline(5);check('大小与旋转关键帧真实姿态',Math.abs(engine.currentSample.scale-1.3)<1e-8&&Math.abs(engine.currentSample.rotation[1]-45)<1e-8,engine.currentSample);
+  engine.seekTimeline(2.5);const paused=await hash();await wait(200);check('暂停冻结运动',await hash()===paused,engine.state);
+  display('连续替换图片与多网格模型 20 次…');
+  for(let i=0;i<20;i++){const next=await loadParticleAsset(await file(i%2?'sample-sphere.glb':'color-flower.png'));engine.setAsset(next);engine.setProgress(.5);await wait(60);report.imports.push({index:i+1,count:engine.state.actualCount,geometries:engine.renderer.info.memory.geometries});}
+  check('20次替换GPU几何无持续增长',Math.max(...report.imports.map(s=>s.geometries))<=2,report.imports);
+  engine.setAsset(reference);engine.seekTimeline(0);engine.setTimelineLoop(true);engine.setTimelinePlaying(true);await wait(1200);
+  for(let i=0;i<4;i++){await wait(1000);report.editingFPS.push(engine.state.fps);}
+  display('录制流场、淡出与大小旋转关键帧，约 11 秒有效时长…');
+  let phase='record';const sample=setInterval(()=>{if(phase==='record')report.recordingFPS.push(engine.state.fps);},1000);
+  const result=await new Promise((resolve,reject)=>{
+    let prior=false;
+    recorder=new CanvasRecorder(engine.canvas,s=>{if(s.status==='ready')resolve(s.result);if(s.status==='error')reject(new Error(s.error));},paused=>{if(paused){prior=engine.state.running;engine.setRunning(false);}else engine.setRunning(prior);});
+    recorder.setProjectName('Color_Flower');recorder.start('high');
+    setTimeout(()=>{phase='paused';recorder.pause();setTimeout(()=>{recorder.resume();phase='record';setTimeout(()=>recorder.stop(),5500);},1500);},5500);
+  });
+  phase='done';clearInterval(sample);engine.setRunning(false);
+  report.video={duration:result.duration,width:result.width,height:result.height,mime:result.mimeType,bytes:result.blob.size,filename:result.filename,requestedFPS:30,bitrate:12000000,pausedWallSeconds:1.5};
+  check('录像大于10秒且排除暂停',result.duration>=10.8&&result.duration<12,report.video);
+  report.video.saved=await save('/__qa/video',result.blob,result.mimeType);
+  ui.video.hidden=false;ui.video.src='/__qa/video';
+  report.measured={editingMeanFPS:mean(report.editingFPS),recordingMeanFPS:mean(report.recordingFPS)};
+  await save('/__qa/report',JSON.stringify(report),'application/json');
+  display('开始 5 分钟聚散循环稳定性测试…');engine.setTimelinePlaying(true);
+  const start=performance.now();let lastReport=0;
+  while(performance.now()-start<300000){await wait(5000);const seconds=(performance.now()-start)/1000;report.stability.push({seconds:Number(seconds.toFixed(1)),fps:engine.state.fps,visible:!document.hidden,geometries:engine.renderer.info.memory.geometries});display('稳定性运行 '+seconds.toFixed(0)+' / 300 秒');if(seconds-lastReport>=30){await save('/__qa/report',JSON.stringify(report),'application/json');lastReport=seconds;}}
+  engine.setRunning(false);check('5分钟循环GPU资源稳定',report.stability.every(s=>s.geometries<=2),report.stability.length+'个样本');report.completedAt=new Date().toISOString();await save('/__qa/report',JSON.stringify(report),'application/json');display('全部验证完成；真实录像与报告已保存。');
+ }catch(error){report.error=error.message;display('验证失败：'+error.message);await save('/__qa/report',JSON.stringify(report),'application/json').catch(()=>{});}
+});
+</script></body></html>

@@ -1,0 +1,1133 @@
+{
+  "name": "照片配色双朵百合 · 立体近似",
+  "version": 2,
+  "method": "hand-authored curved parametric petals, photo-projected UV atlas and closed organ meshes",
+  "source": {
+    "name": "6e150adb7b1ac6b34b4715def9a8f0fd.jpg",
+    "copiedAs": "lily-reference.jpg",
+    "width": 736,
+    "height": 736,
+    "sha256": "b47aacdbca8e54e33bdfe990e132d0230080889b6a30a710b8fcf875c822193d",
+    "intactCopy": true
+  },
+  "meshCount": 44,
+  "categories": {
+    "closed-petal": 12,
+    "filament": 12,
+    "anther": 12,
+    "pistil": 2,
+    "stigma": 2,
+    "stem": 2,
+    "closed-leaf": 2
+  },
+  "triangles": 97136,
+  "vertices": 56348,
+  "bounds": {
+    "min": [
+      -1.8184168121583366,
+      -1.6271345924876623,
+      -0.7271314416608189
+    ],
+    "max": [
+      1.8680299155300755,
+      2.498725142185428,
+      1.4150370306831404
+    ],
+    "size": [
+      3.686446727688412,
+      4.1258597346730905,
+      2.1421684723439594
+    ],
+    "depthToWidth": 0.5810930227892394
+  },
+  "textures": {
+    "embeddedPNG": true,
+    "atlasSize": [
+      1024,
+      1536
+    ],
+    "bytes": 1356753,
+    "baseColorFactor": [
+      1,
+      1,
+      1,
+      1
+    ],
+    "alphaUsed": false
+  },
+  "validation": {
+    "allTrianglesNondegenerate": true,
+    "allValuesFinite": true,
+    "allMeshesClosedAfterSeamWelding": true,
+    "allMeshSignedVolumesPositive": true,
+    "allUVsInRange": true,
+    "externalResources": false,
+    "compression": false
+  },
+  "assumptions": [
+    "这不是单图精确三维重建：Z 深度、弯曲、薄厚度和被遮挡结构均为人工近似。",
+    "两朵花各六片独立闭合花瓣；可见布局按照片定位，其余形状依据百合外观推定。",
+    "正面每片花瓣用其原图区域投色，黑背景不生成几何；贴图边缘及花蕊遮挡处以附近花瓣颜色延续。",
+    "背面使用同瓣颜色延续并轻微降低亮度，未声称是不可见背面的真实颜色。",
+    "花药、花丝、柱头、茎叶有真实三维网格；未见细节和部分内部花蕊配色为推定。",
+    "照片中的蓝紫及橙色照明已包含在基础色贴图中，并非重建真实材质或灯光。"
+  ],
+  "meshes": [
+    {
+      "name": "lily-front-petal-upper-left",
+      "category": "closed-petal",
+      "vertices": 3874,
+      "triangles": 6464,
+      "bounds": {
+        "min": [
+          -0.5937046915154295,
+          0.027873326695394912,
+          0.3133163301753932
+        ],
+        "max": [
+          0.15295485263421105,
+          1.484722614933965,
+          1.4150370306831404
+        ]
+      },
+      "minTriangleArea": 9.091003871384926e-06,
+      "closedAfterSeamWelding": true,
+      "signedVolume": 0.02528620533515581,
+      "outwardWinding": true,
+      "uv": true,
+      "thinThickness": 0.024
+    },
+    {
+      "name": "lily-front-petal-upper-right",
+      "category": "closed-petal",
+      "vertices": 3874,
+      "triangles": 6464,
+      "bounds": {
+        "min": [
+          0.1121720461730146,
+          0.053613588185527056,
+          0.311272672211042
+        ],
+        "max": [
+          1.1628226507187356,
+          1.378340437981869,
+          1.2911482951160482
+        ]
+      },
+      "minTriangleArea": 9.09132886085859e-06,
+      "closedAfterSeamWelding": true,
+      "signedVolume": 0.024308686220217073,
+      "outwardWinding": true,
+      "uv": true,
+      "thinThickness": 0.024
+    },
+    {
+      "name": "lily-front-petal-right",
+      "category": "closed-petal",
+      "vertices": 3874,
+      "triangles": 6464,
+      "bounds": {
+        "min": [
+          0.10980882767280167,
+          -0.20623221073666306,
+          0.3107010732631232
+        ],
+        "max": [
+          1.8680299155300755,
+          0.6712857917890496,
+          1.1474085130168714
+        ]
+      },
+      "minTriangleArea": 9.091218980976776e-06,
+      "closedAfterSeamWelding": true,
+      "signedVolume": 0.031168880421190592,
+      "outwardWinding": true,
+      "uv": true,
+      "thinThickness": 0.024
+    },
+    {
+      "name": "lily-front-petal-lower-right",
+      "category": "closed-petal",
+      "vertices": 3874,
+      "triangles": 6464,
+      "bounds": {
+        "min": [
+          0.08740258013480415,
+          -1.2121670865319332,
+          0.3129236855157517
+        ],
+        "max": [
+          1.0374650816681963,
+          -0.05807201833187915,
+          1.381151917839785
+        ]
+      },
+      "minTriangleArea": 9.09147568953841e-06,
+      "closedAfterSeamWelding": true,
+      "signedVolume": 0.023908386874618454,
+      "outwardWinding": true,
+      "uv": true,
+      "thinThickness": 0.024
+    },
+    {
+      "name": "lily-front-petal-lower-left",
+      "category": "closed-petal",
+      "vertices": 3874,
+      "triangles": 6464,
+      "bounds": {
+        "min": [
+          -0.5219710573243005,
+          -0.5942934163163663,
+          0.3144331396509859
+        ],
+        "max": [
+          0.04089474128072951,
+          -0.050680200633316554,
+          1.2991170908483536
+        ]
+      },
+      "minTriangleArea": 2.5113085994406837e-06,
+      "closedAfterSeamWelding": true,
+      "signedVolume": 0.009154003680850415,
+      "outwardWinding": true,
+      "uv": true,
+      "thinThickness": 0.024
+    },
+    {
+      "name": "lily-front-petal-left",
+      "category": "closed-petal",
+      "vertices": 3874,
+      "triangles": 6464,
+      "bounds": {
+        "min": [
+          -0.9738041928681013,
+          0.06836430800835773,
+          0.3120251671116643
+        ],
+        "max": [
+          0.020959716428184144,
+          1.0819878541126389,
+          1.3594718811624382
+        ]
+      },
+      "minTriangleArea": 9.091879095508187e-06,
+      "closedAfterSeamWelding": true,
+      "signedVolume": 0.022237342001223754,
+      "outwardWinding": true,
+      "uv": true,
+      "thinThickness": 0.024
+    },
+    {
+      "name": "lily-rear-petal-top",
+      "category": "closed-petal",
+      "vertices": 3874,
+      "triangles": 6464,
+      "bounds": {
+        "min": [
+          -0.8368762832212427,
+          1.2719788674062287,
+          -0.4683490932536366
+        ],
+        "max": [
+          0.17317615269026249,
+          2.498725142185428,
+          0.35565552690959595
+        ]
+      },
+      "minTriangleArea": 3.637257051976334e-06,
+      "closedAfterSeamWelding": true,
+      "signedVolume": 0.01858405744717811,
+      "outwardWinding": true,
+      "uv": true,
+      "thinThickness": 0.024
+    },
+    {
+      "name": "lily-rear-petal-upper-right",
+      "category": "closed-petal",
+      "vertices": 3874,
+      "triangles": 6464,
+      "bounds": {
+        "min": [
+          -0.7990683748797541,
+          1.2578427116563469,
+          -0.7006241738497855
+        ],
+        "max": [
+          0.3055165817336674,
+          2.271216364250949,
+          0.2271039433197495
+        ]
+      },
+      "minTriangleArea": 6.10818757150149e-06,
+      "closedAfterSeamWelding": true,
+      "signedVolume": 0.017695082568132642,
+      "outwardWinding": true,
+      "uv": true,
+      "thinThickness": 0.024
+    },
+    {
+      "name": "lily-rear-petal-right",
+      "category": "closed-petal",
+      "vertices": 3877,
+      "triangles": 6464,
+      "bounds": {
+        "min": [
+          -0.7805774344341383,
+          0.7728727982966318,
+          -0.46807330684070775
+        ],
+        "max": [
+          0.1982982402507697,
+          1.4151279965721282,
+          0.31639852799421675
+        ]
+      },
+      "minTriangleArea": 7.340233932954675e-07,
+      "closedAfterSeamWelding": true,
+      "signedVolume": 0.01532079158459434,
+      "outwardWinding": true,
+      "uv": true,
+      "thinThickness": 0.024
+    },
+    {
+      "name": "lily-rear-petal-lower-right",
+      "category": "closed-petal",
+      "vertices": 3874,
+      "triangles": 6464,
+      "bounds": {
+        "min": [
+          -0.8954287108610979,
+          0.29670819820962097,
+          -0.4662054845924398
+        ],
+        "max": [
+          -0.33225684178517206,
+          1.2037989772459168,
+          0.4750562358437309
+        ]
+      },
+      "minTriangleArea": 7.951834339187127e-06,
+      "closedAfterSeamWelding": true,
+      "signedVolume": 0.013652932142025407,
+      "outwardWinding": true,
+      "uv": true,
+      "thinThickness": 0.024
+    },
+    {
+      "name": "lily-rear-petal-lower-left",
+      "category": "closed-petal",
+      "vertices": 3880,
+      "triangles": 6464,
+      "bounds": {
+        "min": [
+          -1.8184168121583366,
+          0.24963011347028694,
+          -0.46716715076111737
+        ],
+        "max": [
+          -0.874930892145703,
+          1.236734052074049,
+          0.36382887614887904
+        ]
+      },
+      "minTriangleArea": 2.6105042529795424e-06,
+      "closedAfterSeamWelding": true,
+      "signedVolume": 0.018417698977473328,
+      "outwardWinding": true,
+      "uv": true,
+      "thinThickness": 0.024
+    },
+    {
+      "name": "lily-rear-petal-left",
+      "category": "closed-petal",
+      "vertices": 3877,
+      "triangles": 6464,
+      "bounds": {
+        "min": [
+          -1.6046313837688635,
+          1.0303209348793103,
+          -0.465814948454847
+        ],
+        "max": [
+          -0.8668585784109303,
+          1.5433993467084037,
+          0.4228979353177859
+        ]
+      },
+      "minTriangleArea": 1.0853830078984793e-06,
+      "closedAfterSeamWelding": true,
+      "signedVolume": 0.010223337652745097,
+      "outwardWinding": true,
+      "uv": true,
+      "thinThickness": 0.024
+    },
+    {
+      "name": "lily-front-filament-1",
+      "category": "filament",
+      "vertices": 218,
+      "triangles": 432,
+      "bounds": {
+        "min": [
+          0.05475695369778564,
+          0.018606808238476307,
+          0.33184961449584993
+        ],
+        "max": [
+          0.285692418004812,
+          0.7817050000103223,
+          1.2293111350616175
+        ]
+      },
+      "minTriangleArea": 3.5073062032277394e-05,
+      "closedAfterSeamWelding": true,
+      "signedVolume": 0.0004369437613478155,
+      "outwardWinding": true,
+      "uv": false,
+      "thinThickness": null
+    },
+    {
+      "name": "lily-front-anther-1",
+      "category": "anther",
+      "vertices": 146,
+      "triangles": 288,
+      "bounds": {
+        "min": [
+          0.22538031991702,
+          0.734289143590577,
+          1.1967648931916708
+        ],
+        "max": [
+          0.3079530134163133,
+          0.974801765500332,
+          1.2832351068083292
+        ]
+      },
+      "minTriangleArea": 2.5710385766788088e-05,
+      "closedAfterSeamWelding": true,
+      "signedVolume": 0.0006208137364136665,
+      "outwardWinding": true,
+      "uv": false,
+      "thinThickness": null
+    },
+    {
+      "name": "lily-front-filament-2",
+      "category": "filament",
+      "vertices": 218,
+      "triangles": 432,
+      "bounds": {
+        "min": [
+          0.06305121922263368,
+          0.018630494514853182,
+          0.33185950104490697
+        ],
+        "max": [
+          0.594454788845956,
+          0.8185804792322313,
+          1.3283410997740657
+        ]
+      },
+      "minTriangleArea": 3.507306203227768e-05,
+      "closedAfterSeamWelding": true,
+      "signedVolume": 0.0005041472937644473,
+      "outwardWinding": true,
+      "uv": false,
+      "thinThickness": null
+    },
+    {
+      "name": "lily-front-anther-2",
+      "category": "anther",
+      "vertices": 146,
+      "triangles": 288,
+      "bounds": {
+        "min": [
+          0.5526671184115182,
+          0.7710322418723542,
+          1.2956584614804993
+        ],
+        "max": [
+          0.6352116694672698,
+          1.0107859399458274,
+          1.3843415385195008
+        ]
+      },
+      "minTriangleArea": 2.571038576678981e-05,
+      "closedAfterSeamWelding": true,
+      "signedVolume": 0.000620813736414187,
+      "outwardWinding": true,
+      "uv": false,
+      "thinThickness": null
+    },
+    {
+      "name": "lily-front-filament-3",
+      "category": "filament",
+      "vertices": 218,
+      "triangles": 432,
+      "bounds": {
+        "min": [
+          0.06055880881969837,
+          0.018425797673790437,
+          0.3319280288383226
+        ],
+        "max": [
+          0.8915251347364406,
+          0.6185543957448089,
+          1.1798052913749861
+        ]
+      },
+      "minTriangleArea": 3.5073062032277496e-05,
+      "closedAfterSeamWelding": true,
+      "signedVolume": 0.0004930790329101439,
+      "outwardWinding": true,
+      "uv": false,
+      "thinThickness": null
+    },
+    {
+      "name": "lily-front-anther-3",
+      "category": "anther",
+      "vertices": 146,
+      "triangles": 288,
+      "bounds": {
+        "min": [
+          0.8314341028658653,
+          0.5704687795085805,
+          1.1471588952501885
+        ],
+        "max": [
+          0.9140204425886801,
+          0.8113494023096013,
+          1.2328411047498113
+        ]
+      },
+      "minTriangleArea": 2.5710385766789382e-05,
+      "closedAfterSeamWelding": true,
+      "signedVolume": 0.0006208137364132031,
+      "outwardWinding": true,
+      "uv": false,
+      "thinThickness": null
+    },
+    {
+      "name": "lily-front-filament-4",
+      "category": "filament",
+      "vertices": 218,
+      "triangles": 432,
+      "bounds": {
+        "min": [
+          0.06297106844672119,
+          0.01883680083097621,
+          0.3317086002433512
+        ],
+        "max": [
+          0.273167080743251,
+          0.3803734625623523,
+          0.7540832952142136
+        ]
+      },
+      "minTriangleArea": 3.5073062032277685e-05,
+      "closedAfterSeamWelding": true,
+      "signedVolume": 0.00020847791623215925,
+      "outwardWinding": true,
+      "uv": false,
+      "thinThickness": null
+    },
+    {
+      "name": "lily-front-anther-4",
+      "category": "anther",
+      "vertices": 146,
+      "triangles": 288,
+      "bounds": {
+        "min": [
+          0.23228534275708101,
+          0.3570607277543903,
+          0.7234468541966518
+        ],
+        "max": [
+          0.3131692026974644,
+          0.5520301813365187,
+          0.7965531458033482
+        ]
+      },
+      "minTriangleArea": 2.4698389897468905e-05,
+      "closedAfterSeamWelding": true,
+      "signedVolume": 0.0004966509891309067,
+      "outwardWinding": true,
+      "uv": false,
+      "thinThickness": null
+    },
+    {
+      "name": "lily-front-filament-5",
+      "category": "filament",
+      "vertices": 218,
+      "triangles": 432,
+      "bounds": {
+        "min": [
+          0.0586097031773903,
+          0.018798896052930454,
+          0.33170377793909256
+        ],
+        "max": [
+          0.47967128716552987,
+          0.31988197708709043,
+          0.6749116191020481
+        ]
+      },
+      "minTriangleArea": 3.5073062032277726e-05,
+      "closedAfterSeamWelding": true,
+      "signedVolume": 0.00023250588081104455,
+      "outwardWinding": true,
+      "uv": false,
+      "thinThickness": null
+    },
+    {
+      "name": "lily-front-anther-5",
+      "category": "anther",
+      "vertices": 146,
+      "triangles": 288,
+      "bounds": {
+        "min": [
+          0.4201573447241921,
+          0.29627166988603265,
+          0.6439752765687381
+        ],
+        "max": [
+          0.5010547764879292,
+          0.4916071179927552,
+          0.716024723431262
+        ]
+      },
+      "minTriangleArea": 2.4698389897469057e-05,
+      "closedAfterSeamWelding": true,
+      "signedVolume": 0.0004966509891308835,
+      "outwardWinding": true,
+      "uv": false,
+      "thinThickness": null
+    },
+    {
+      "name": "lily-front-filament-6",
+      "category": "filament",
+      "vertices": 218,
+      "triangles": 432,
+      "bounds": {
+        "min": [
+          0.0631169797888977,
+          0.01867751245174859,
+          0.33166017207519305
+        ],
+        "max": [
+          0.6427258319360581,
+          0.37463299290136637,
+          0.734305490582094
+        ]
+      },
+      "minTriangleArea": 3.50730620322776e-05,
+      "closedAfterSeamWelding": true,
+      "signedVolume": 0.00028988255081869,
+      "outwardWinding": true,
+      "uv": false,
+      "thinThickness": null
+    },
+    {
+      "name": "lily-front-anther-6",
+      "category": "anther",
+      "vertices": 146,
+      "triangles": 288,
+      "bounds": {
+        "min": [
+          0.6019805846685559,
+          0.350953528099517,
+          0.7035784347588059
+        ],
+        "max": [
+          0.682867900179929,
+          0.54601616887018,
+          0.7764215652411941
+        ]
+      },
+      "minTriangleArea": 2.4698389897468488e-05,
+      "closedAfterSeamWelding": true,
+      "signedVolume": 0.0004966509891308657,
+      "outwardWinding": true,
+      "uv": false,
+      "thinThickness": null
+    },
+    {
+      "name": "lily-front-style",
+      "category": "pistil",
+      "vertices": 312,
+      "triangles": 620,
+      "bounds": {
+        "min": [
+          0.05884754676017008,
+          0.01750682518789322,
+          0.3280216745485771
+        ],
+        "max": [
+          0.4459823207989644,
+          0.7009707867503666,
+          1.0128927617737582
+        ]
+      },
+      "minTriangleArea": 5.8511700113968484e-05,
+      "closedAfterSeamWelding": true,
+      "signedVolume": 0.0007824888351331567,
+      "outwardWinding": true,
+      "uv": false,
+      "thinThickness": null
+    },
+    {
+      "name": "lily-front-stigma",
+      "category": "stigma",
+      "vertices": 86,
+      "triangles": 168,
+      "bounds": {
+        "min": [
+          0.39730303030303027,
+          0.6660814056854331,
+          0.9731212189906472
+        ],
+        "max": [
+          0.4633030303030303,
+          0.727857988253961,
+          1.026878781009353
+        ]
+      },
+      "minTriangleArea": 3.3339334576272754e-05,
+      "closedAfterSeamWelding": true,
+      "signedVolume": 0.00010823311453137437,
+      "outwardWinding": true,
+      "uv": false,
+      "thinThickness": null
+    },
+    {
+      "name": "lily-rear-filament-1",
+      "category": "filament",
+      "vertices": 218,
+      "triangles": 432,
+      "bounds": {
+        "min": [
+          -1.2575219292595623,
+          1.2365102080510577,
+          -0.4381592439859322
+        ],
+        "max": [
+          -0.7965318024686212,
+          1.6480187483875395,
+          0.3107018118905226
+        ]
+      },
+      "minTriangleArea": 3.507306203227734e-05,
+      "closedAfterSeamWelding": true,
+      "signedVolume": 0.0003563415540703801,
+      "outwardWinding": true,
+      "uv": false,
+      "thinThickness": null
+    },
+    {
+      "name": "lily-rear-anther-1",
+      "category": "anther",
+      "vertices": 146,
+      "triangles": 288,
+      "bounds": {
+        "min": [
+          -1.2958518348060215,
+          1.6004155618975262,
+          0.2779552080988711
+        ],
+        "max": [
+          -1.2132390742848878,
+          1.8420086805267162,
+          0.3620447919011289
+        ]
+      },
+      "minTriangleArea": 2.5710385766789172e-05,
+      "closedAfterSeamWelding": true,
+      "signedVolume": 0.0006208137364131887,
+      "outwardWinding": true,
+      "uv": false,
+      "thinThickness": null
+    },
+    {
+      "name": "lily-rear-filament-2",
+      "category": "filament",
+      "vertices": 218,
+      "triangles": 432,
+      "bounds": {
+        "min": [
+          -1.1186792430466126,
+          1.2365803130579751,
+          -0.43803809913317193
+        ],
+        "max": [
+          -0.7930454731771353,
+          1.7877900912902922,
+          0.4394334548443301
+        ]
+      },
+      "minTriangleArea": 3.507306203227751e-05,
+      "closedAfterSeamWelding": true,
+      "signedVolume": 0.0003974594602344737,
+      "outwardWinding": true,
+      "uv": false,
+      "thinThickness": null
+    },
+    {
+      "name": "lily-rear-anther-2",
+      "category": "anther",
+      "vertices": 146,
+      "triangles": 288,
+      "bounds": {
+        "min": [
+          -1.1382587901735466,
+          1.7402756853803651,
+          0.40692215915332414
+        ],
+        "max": [
+          -1.0556806037658473,
+          1.980936435831756,
+          0.4930778408466759
+        ]
+      },
+      "minTriangleArea": 2.571038576678916e-05,
+      "closedAfterSeamWelding": true,
+      "signedVolume": 0.0006208137364139306,
+      "outwardWinding": true,
+      "uv": false,
+      "thinThickness": null
+    },
+    {
+      "name": "lily-rear-filament-3",
+      "category": "filament",
+      "vertices": 218,
+      "triangles": 432,
+      "bounds": {
+        "min": [
+          -0.9250144319268802,
+          1.2369039692134403,
+          -0.4381911629800377
+        ],
+        "max": [
+          -0.7963572096645906,
+          1.9450908046314324,
+          0.39988399756983256
+        ]
+      },
+      "minTriangleArea": 3.507306203227753e-05,
+      "closedAfterSeamWelding": true,
+      "signedVolume": 0.00040080548618972017,
+      "outwardWinding": true,
+      "uv": false,
+      "thinThickness": null
+    },
+    {
+      "name": "lily-rear-anther-3",
+      "category": "anther",
+      "vertices": 146,
+      "triangles": 288,
+      "bounds": {
+        "min": [
+          -0.9564460323566042,
+          1.897705172650117,
+          0.3672380297672494
+        ],
+        "max": [
+          -0.8738569979464261,
+          2.138658463713519,
+          0.45276197023275055
+        ]
+      },
+      "minTriangleArea": 2.5710385766789236e-05,
+      "closedAfterSeamWelding": true,
+      "signedVolume": 0.0006208137364136513,
+      "outwardWinding": true,
+      "uv": false,
+      "thinThickness": null
+    },
+    {
+      "name": "lily-rear-filament-4",
+      "category": "filament",
+      "vertices": 218,
+      "triangles": 432,
+      "bounds": {
+        "min": [
+          -0.8243598624852482,
+          1.2369813436847754,
+          -0.4382951945722847
+        ],
+        "max": [
+          -0.7822825816010999,
+          1.97467803891369,
+          0.2019067815649036
+        ]
+      },
+      "minTriangleArea": 3.507306203227728e-05,
+      "closedAfterSeamWelding": true,
+      "signedVolume": 0.00035065011491488917,
+      "outwardWinding": true,
+      "uv": false,
+      "thinThickness": null
+    },
+    {
+      "name": "lily-rear-anther-4",
+      "category": "anther",
+      "vertices": 146,
+      "triangles": 288,
+      "bounds": {
+        "min": [
+          -0.834360972326487,
+          1.9515489475800916,
+          0.17202308718701292
+        ],
+        "max": [
+          -0.7535178155523009,
+          2.145420749389605,
+          0.24797691281298712
+        ]
+      },
+      "minTriangleArea": 2.469838989746887e-05,
+      "closedAfterSeamWelding": true,
+      "signedVolume": 0.0004966509891309706,
+      "outwardWinding": true,
+      "uv": false,
+      "thinThickness": null
+    },
+    {
+      "name": "lily-rear-filament-5",
+      "category": "filament",
+      "vertices": 218,
+      "triangles": 432,
+      "bounds": {
+        "min": [
+          -1.0295005398653803,
+          1.2368430494712845,
+          -0.43832003695284977
+        ],
+        "max": [
+          -0.7964483613505876,
+          1.477033116070861,
+          -0.08522920748727099
+        ]
+      },
+      "minTriangleArea": 3.507306203227738e-05,
+      "closedAfterSeamWelding": true,
+      "signedVolume": 0.00017684948693291735,
+      "outwardWinding": true,
+      "uv": false,
+      "thinThickness": null
+    },
+    {
+      "name": "lily-rear-anther-5",
+      "category": "anther",
+      "vertices": 146,
+      "triangles": 288,
+      "bounds": {
+        "min": [
+          -1.0646903102155811,
+          1.4538698078035068,
+          -0.1160910812869058
+        ],
+        "max": [
+          -0.9837945382692672,
+          1.6491604952267962,
+          -0.04390891871309422
+        ]
+      },
+      "minTriangleArea": 2.4698389897468545e-05,
+      "closedAfterSeamWelding": true,
+      "signedVolume": 0.0004966509891308476,
+      "outwardWinding": true,
+      "uv": false,
+      "thinThickness": null
+    },
+    {
+      "name": "lily-rear-filament-6",
+      "category": "filament",
+      "vertices": 218,
+      "triangles": 432,
+      "bounds": {
+        "min": [
+          -0.8158448061625609,
+          1.237000802869924,
+          -0.4382898379107933
+        ],
+        "max": [
+          -0.7147075812519833,
+          1.4649015603883857,
+          -0.11491327424245659
+        ]
+      },
+      "minTriangleArea": 3.5073062032277055e-05,
+      "closedAfterSeamWelding": true,
+      "signedVolume": 0.00013771632026759822,
+      "outwardWinding": true,
+      "uv": false,
+      "thinThickness": null
+    },
+    {
+      "name": "lily-rear-anther-6",
+      "category": "anther",
+      "vertices": 146,
+      "triangles": 288,
+      "bounds": {
+        "min": [
+          -0.7556018750246044,
+          1.4416818814460421,
+          -0.14589174834348717
+        ],
+        "max": [
+          -0.674701155278426,
+          1.6371059973418365,
+          -0.07410825165651279
+        ]
+      },
+      "minTriangleArea": 2.469838989746874e-05,
+      "closedAfterSeamWelding": true,
+      "signedVolume": 0.0004966509891308311,
+      "outwardWinding": true,
+      "uv": false,
+      "thinThickness": null
+    },
+    {
+      "name": "lily-rear-style",
+      "category": "pistil",
+      "vertices": 312,
+      "triangles": 620,
+      "bounds": {
+        "min": [
+          -1.1411708105406022,
+          1.2361105919853086,
+          -0.44201226732344817
+        ],
+        "max": [
+          -0.7898183734219142,
+          2.1073023755232234,
+          0.24293502914309317
+        ]
+      },
+      "minTriangleArea": 5.8511700113968084e-05,
+      "closedAfterSeamWelding": true,
+      "signedVolume": 0.0008743861349996438,
+      "outwardWinding": true,
+      "uv": false,
+      "thinThickness": null
+    },
+    {
+      "name": "lily-rear-stigma",
+      "category": "stigma",
+      "vertices": 86,
+      "triangles": 168,
+      "bounds": {
+        "min": [
+          -1.1602727272727271,
+          2.072142011746039,
+          0.20312121899064717
+        ],
+        "max": [
+          -1.0942727272727273,
+          2.133918594314567,
+          0.2568787810093529
+        ]
+      },
+      "minTriangleArea": 3.3339334576272924e-05,
+      "closedAfterSeamWelding": true,
+      "signedVolume": 0.00010823311453130498,
+      "outwardWinding": true,
+      "uv": false,
+      "thinThickness": null
+    },
+    {
+      "name": "lily-main-curved-stem",
+      "category": "stem",
+      "vertices": 1192,
+      "triangles": 2380,
+      "bounds": {
+        "min": [
+          -0.14747939041247873,
+          -1.6271345924876623,
+          -0.651685034966917
+        ],
+        "max": [
+          0.10006107446680687,
+          -0.020045349625039652,
+          0.24572533639976524
+        ]
+      },
+      "minTriangleArea": 9.102786335677434e-05,
+      "closedAfterSeamWelding": true,
+      "signedVolume": 0.0036316931925642316,
+      "outwardWinding": true,
+      "uv": false,
+      "thinThickness": null
+    },
+    {
+      "name": "lily-rear-branch-stem",
+      "category": "stem",
+      "vertices": 1248,
+      "triangles": 2492,
+      "bounds": {
+        "min": [
+          -0.8257381943269799,
+          -0.9999020523478082,
+          -0.714133806483835
+        ],
+        "max": [
+          -0.07143526228327453,
+          1.1770868042824354,
+          -0.501802479701152
+        ]
+      },
+      "minTriangleArea": 8.608392226888805e-05,
+      "closedAfterSeamWelding": true,
+      "signedVolume": 0.003578166574865796,
+      "outwardWinding": true,
+      "uv": false,
+      "thinThickness": null
+    },
+    {
+      "name": "lily-leaf-left",
+      "category": "closed-leaf",
+      "vertices": 1122,
+      "triangles": 2240,
+      "bounds": {
+        "min": [
+          -0.58776878913924,
+          -0.934753026914051,
+          -0.4656291245521744
+        ],
+        "max": [
+          -0.09338797625096484,
+          -0.29083585924088534,
+          -0.06521247244782448
+        ]
+      },
+      "minTriangleArea": 1.3636433832793182e-05,
+      "closedAfterSeamWelding": true,
+      "signedVolume": 0.003917204256109961,
+      "outwardWinding": true,
+      "uv": false,
+      "thinThickness": 0.018
+    },
+    {
+      "name": "lily-leaf-right",
+      "category": "closed-leaf",
+      "vertices": 1122,
+      "triangles": 2240,
+      "bounds": {
+        "min": [
+          -0.14026759489158794,
+          -1.2671185310072477,
+          -0.7271314416608189
+        ],
+        "max": [
+          0.3345951121031898,
+          -0.4196828012509478,
+          -0.31934631421862236
+        ]
+      },
+      "minTriangleArea": 1.3638382068037229e-05,
+      "closedAfterSeamWelding": true,
+      "signedVolume": 0.003717482564836318,
+      "outwardWinding": true,
+      "uv": false,
+      "thinThickness": 0.018
+    }
+  ]
+}
