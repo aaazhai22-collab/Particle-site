@@ -39,7 +39,7 @@ test('transparent image pixels are omitted, faint alpha retained, and sRGB conve
   assert.throws(() => assets.sampleImagePixels(2, 2, new Uint8ClampedArray(16), 'clear.png'), /完全透明/);
 });
 
-test('image low discrepancy permutation generates unique sample prefixes at the 100k cap', () => {
+test('seeded image shuffle generates unique sample prefixes at the 100k cap', () => {
   const pixels = new Uint8ClampedArray(500 * 500 * 4).fill(255);
   const asset = assets.sampleImagePixels(500, 500, pixels, 'large.jpg');
   assert.equal(asset.count, 100000);
@@ -47,6 +47,39 @@ test('image low discrepancy permutation generates unique sample prefixes at the 
   for (let i = 0; i < asset.positions.length; i += 3) points.add(`${asset.positions[i]},${asset.positions[i + 1]}`);
   assert.equal(points.size, 100000);
   assert.ok(maximumRadius(asset.positions) <= 1.3500001);
+});
+
+test('736px portrait image prefixes cover rows/columns without periodic stripe bias', () => {
+  const width = 736; const height = 981;
+  const pixels = new Uint8ClampedArray(width * height * 4).fill(255);
+  const first = assets.sampleImagePixels(width, height, pixels, 'portrait.jpg');
+  const second = assets.sampleImagePixels(width, height, pixels, 'portrait.jpg');
+  const centerX = (width - 1) / 2; const centerY = (height - 1) / 2;
+  const scale = 1.35 / Math.hypot(centerX, centerY);
+  const columns = new Set(); const rows = new Set(); const unique = new Set();
+  const cells = new Uint32Array(64); const xResidues = new Uint32Array(16); const yResidues = new Uint32Array(16);
+  for (let i = 0; i < first.count; i++) {
+    const x = Math.round(first.positions[i * 3] / scale + centerX);
+    const y = Math.round(centerY - first.positions[i * 3 + 1] / scale);
+    assert.ok(x >= 0 && x < width && y >= 0 && y < height);
+    unique.add(y * width + x);
+    if (i < 30000) { columns.add(x); rows.add(y); }
+    if (i < 1000) {
+      cells[Math.floor(y / height * 8) * 8 + Math.floor(x / width * 8)]++;
+      xResidues[x % 16]++; yResidues[y % 16]++;
+    }
+  }
+  assert.equal(first.count, 100000);
+  assert.equal(unique.size, first.count, 'the capped pool must contain distinct valid pixels');
+  assert.ok(columns.size / width > 0.95, `30k prefix covers ${columns.size}/${width} columns`);
+  assert.ok(rows.size / height > 0.95, `30k prefix covers ${rows.size}/${height} rows`);
+  assert.ok(cells.every(count => count >= 3 && count <= 34), `1k spatial cells: ${[...cells]}`);
+  assert.ok(xResidues.every(count => count >= 30 && count <= 100), `1k x mod 16 bins: ${[...xResidues]}`);
+  assert.ok(yResidues.every(count => count >= 30 && count <= 100), `1k y mod 16 bins: ${[...yResidues]}`);
+  for (const count of [1000, 30000, 100000]) {
+    assert.deepEqual(first.positions.subarray(0, count * 3), second.positions.subarray(0, count * 3));
+    assert.deepEqual(first.seeds.subarray(0, count * 3), second.seeds.subarray(0, count * 3));
+  }
 });
 
 test('world scale changes triangle sampling probability by transformed surface area', () => {

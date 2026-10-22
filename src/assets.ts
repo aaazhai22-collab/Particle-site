@@ -105,15 +105,19 @@ export function sampleImagePixels(width: number, height: number, pixels: Uint8Cl
   const scale = radiusSquared > 0 ? RADIUS / Math.sqrt(radiusSquared) : 1;
   const count = Math.min(POOL_SIZE, validCount);
   const positions = new Float32Array(count * 3); const colors = new Float32Array(count * 3);
-  // A bit-reversal permutation produces unique, evenly spread prefixes; padding is skipped.
-  const domain = 2 ** Math.ceil(Math.log2(validCount));
-  for (let sequence = 0, n = 0; n < count; sequence++) {
-    const slot = Math.round(radicalInverse(sequence, 2) * domain);
-    if (slot >= validCount) continue;
-    const pixel = valid[slot]; const p = pixel * 4;
+  // Shuffle once with a fixed seed. Reversing bits of a flattened pixel index
+  // aliases with widths such as 736 and selects whole columns in early prefixes.
+  // This permutation keeps prefixes stable and unique without a spatial lattice.
+  let sampleSeed = 0x537a2d91;
+  for (let i = validCount - 1; i > 0; i--) {
+    sampleSeed ^= sampleSeed << 13; sampleSeed ^= sampleSeed >>> 17; sampleSeed ^= sampleSeed << 5;
+    const j = (sampleSeed >>> 0) % (i + 1);
+    const pixel = valid[i]; valid[i] = valid[j]; valid[j] = pixel;
+  }
+  for (let n = 0; n < count; n++) {
+    const pixel = valid[n]; const p = pixel * 4;
     positions.set([((pixel % width) - centerX) * scale, (centerY - Math.floor(pixel / width)) * scale, 0], n * 3);
     colors.set([linearChannel(pixels[p] / 255), linearChannel(pixels[p + 1] / 255), linearChannel(pixels[p + 2] / 255)], n * 3);
-    n++;
   }
   const notes = count < POOL_SIZE ? [`有效像素为 ${validCount.toLocaleString()} 个，最多生成 ${count.toLocaleString()} 个不重复粒子。`] : [];
   if (partialAlpha) notes.push('图片包含半透明像素；本版用 Alpha 过滤全透明区域，粒子透明度由统一参数控制。');
