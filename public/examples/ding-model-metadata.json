@@ -1,0 +1,97 @@
+{
+  "sourceFile": "青铜方鼎_v002.blend",
+  "sourceSha256": "066c6d6723c4e94776341d9f7678f2a972f2af7e293fc0fa15a6d39a873f7239",
+  "generatedAt": "2026-10-23T06:31:52.767847+00:00",
+  "blenderVersion": "5.2.2 LTS",
+  "originalMeshCount": 266,
+  "originalTriangles": 1159328,
+  "targetTriangles": 220000,
+  "finalTriangles": 219846,
+  "exportedTriangles": 219846,
+  "preservedSmallMeshCount": 99,
+  "decimationRatioForLargeMeshes": 0.13997018871932349,
+  "originalBoundsZUp": {
+    "min": [
+      -0.19999998807907104,
+      -0.14999999105930328,
+      0.0
+    ],
+    "max": [
+      0.19999998807907104,
+      0.14999999105930328,
+      0.5
+    ]
+  },
+  "exportedBoundsYUp": {
+    "min": [
+      -0.19999998807907104,
+      0.0,
+      -0.14999999105930328
+    ],
+    "max": [
+      0.19999998807907104,
+      0.5,
+      0.14999999105930328
+    ]
+  },
+  "orientation": "glTF Y-up; source front -Y becomes +Z, toward Three.js camera",
+  "textures": [
+    {
+      "source": "bronze_basecolor.png.001",
+      "sourceSize": [
+        4096,
+        4096
+      ],
+      "exportSize": [
+        2048,
+        2048
+      ],
+      "encoding": "image/jpeg",
+      "quality": 88
+    },
+    {
+      "source": "panel_long_basecolor.png",
+      "sourceSize": [
+        4096,
+        4096
+      ],
+      "exportSize": [
+        2048,
+        2048
+      ],
+      "encoding": "image/jpeg",
+      "quality": 88
+    },
+    {
+      "source": "panel_short_basecolor.png",
+      "sourceSize": [
+        4096,
+        4096
+      ],
+      "exportSize": [
+        2048,
+        2048
+      ],
+      "encoding": "image/jpeg",
+      "quality": 88
+    },
+    {
+      "source": "foot_basecolor.png",
+      "sourceSize": [
+        4096,
+        4096
+      ],
+      "exportSize": [
+        2048,
+        2048
+      ],
+      "encoding": "image/jpeg",
+      "quality": 88
+    }
+  ],
+  "materials": 4,
+  "selfContained": true,
+  "fileBytes": 11956992,
+  "outputSha256": "61860a3ffac69320965f1a4115a308bbfdc26002565397948b9774bdd5e021e2",
+  "sourceUnchanged": true
+}

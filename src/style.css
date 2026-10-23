@@ -187,3 +187,6 @@ select{color:#c1c1cc;background:#24242d;border:1px solid #40404c;border-radius:4
   .right-panel .param-scroll{overflow:visible;max-height:none}
   .toast{position:fixed;bottom:18px;max-width:calc(100% - 30px)}
 }
+.ding-demo-button{width:100%;display:flex;align-items:center;justify-content:center;gap:7px;border:1px solid #537d70;border-radius:6px;background:#20362e;color:#badbc9;padding:9px 4px;margin-top:8px;font-size:10px}
+.ding-demo-button:hover{background:#2b493d}.ding-demo-button>svg:last-child{margin-left:auto}.ding-demo-button>svg:first-child{margin-right:auto}
+.ding-example{border-color:#6c8260;background:#283329}.ding-example button:hover{background:#354735}.ding-example b{color:#d1dfb4}.ding-example small{color:#a6b59a}.ding-example svg{color:#c5d3a9}.ding-example img{background:#edf0e8}.ding-example a{display:flex;align-items:center;justify-content:center;gap:7px;padding:8px;border-top:1px solid #485d44;font-size:10px;color:#c0cfab}.ding-example a:hover{background:#354735;color:#eef8d9}

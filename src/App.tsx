@@ -51,6 +51,19 @@ const LILY_CLIP:AnimationClip = {
     {id:'lily-end',time:12,scale:1,rotation:[0,0,0],progress:0},
   ],
 };
+const DING_CLIP:AnimationClip = {
+  duration:16,
+  keyframes:[
+    {id:'ding-front',time:0,scale:1,rotation:[0,0,0],progress:0},
+    {id:'ding-hold',time:3,scale:1,rotation:[0,0,0],progress:0},
+    {id:'ding-turn',time:6,scale:1,rotation:[0,32,0],progress:0},
+    {id:'ding-flow',time:9,scale:1.02,rotation:[0,38,0],progress:.65},
+    {id:'ding-fade',time:10.8,scale:1.02,rotation:[0,38,0],progress:1},
+    {id:'ding-return',time:11.6,scale:1.02,rotation:[0,38,0],progress:1},
+    {id:'ding-restored',time:14,scale:1,rotation:[0,0,0],progress:0},
+    {id:'ding-end',time:16,scale:1,rotation:[0,0,0],progress:0},
+  ],
+};
 function download(blob:Blob, filename:string) {
   const url=URL.createObjectURL(blob); const a=document.createElement('a'); a.href=url; a.download=filename;
   document.body.append(a); a.click(); a.remove(); setTimeout(()=>URL.revokeObjectURL(url),1500);
@@ -90,7 +103,7 @@ export default function App() {
       engine.current=instance; instance.setTimeline(normalizeClip(DEFAULT_CLIP)); instance.setTimelineLoop(true); instance.setTimelinePlaying(true);
       const r=new CanvasRecorder(instance.canvas,s=>{if(alive){instance.setCaptureActive(s.status==='recording');setRecord({...s});if(recorder.current)setCodec(recorder.current.mimeType);if(s.status==='ready')setVideoOpen(true);if(s.error)setToast(s.error);}},paused=>{if(paused){priorRunning.current=instance.state.running;instance.setRunning(false);}else{instance.setRunning(priorRunning.current);}});
       recorder.current=r; setSupported(r.supported); setCodec(r.mimeType);
-      loadReferenceDemo();
+      loadDingDemo();
     } catch(error) { setEngineError('预览初始化失败：'+(error instanceof Error?error.message:'请使用支持 WebGL 的桌面浏览器。')); }
     return()=>{alive=false;imports.current.dispose();if(countTimer.current)clearTimeout(countTimer.current);recorder.current?.destroy();engine.current?.destroy();};
   },[]);
@@ -150,6 +163,22 @@ export default function App() {
   };
   const chooseFiles=(files:FileList|null)=>{if(!files?.length)return;const file=files[files.length-1];runImport(file.name,()=>loadParticleAsset(file));};
   const example=(url:string,name:string)=>runImport(name,async()=>{const response=await fetch(url);if(!response.ok)throw new Error('示例素材读取失败，请稍后重试。');return loadParticleAsset(new File([await response.blob()],name));});
+  const loadDingDemo=()=>runImport('青铜方鼎.glb',async()=>{
+    const response=await fetch('/examples/ding-model.glb');
+    if(!response.ok)throw new Error('青铜方鼎读取失败，请重试或下载后导入 GLB。');
+    const next=await loadParticleAsset(new File([await response.blob()],'青铜方鼎.glb',{type:'model/gltf-binary'}));
+    return {...next,thumbnail:'/examples/ding-reference.jpg',notes:[
+      '双耳、器身与四足 · 完整三维表面。',
+      '青铜原色 · 拖动观察，空格暂停 / 播放。',
+      ...next.notes,
+    ]};
+  },()=>{
+    const e=engine.current;if(!e)return;
+    if(countTimer.current)clearTimeout(countTimer.current);
+    e.setParams({count:100000,colorMode:'original',size:2,opacity:.95,glow:.3,spread:1.3,depth:1,scatter:.5,stagger:.6,turbulence:.12,motionSpeed:.65,playbackRate:1,erosion:.6,flowScale:1.5,stringiness:1.2,trail:.25,fade:true,direction:'y',autoRotate:false});
+    setParams(e.params);e.setTimeline(DING_CLIP);e.seekTimeline(0);e.setEffect('erosion');e.fitView();e.setTimelineLoop(true);e.setTimelinePlaying(true);
+    setEffect('erosion');setClip(normalizeClip(DING_CLIP));notify('青铜方鼎已就绪：16 秒循环展示，空格暂停，拖动观察三维细节。');
+  });
   const loadReferenceDemo=()=>runImport('粒子花朵参考.jpg',async()=>{
     const response=await fetch('/examples/particle-flower-reference.jpg');
     if(!response.ok)throw new Error('参考图片读取失败，请重新选择文件。');
@@ -219,6 +248,7 @@ export default function App() {
         <div className="source-info"><div>{asset.kind==='image'?<Image size={15}/>:<Box size={15}/>}<strong title={asset.name}>{asset.name}</strong><span className="source-check"><Check size={12}/></span></div><p>{asset.kind==='image'?'IMAGE · 颜色像素采样':asset.kind==='model'?'GLB · 多网格表面采样':'SPHERE · 三维表面采样'}</p></div>
       </button>
       <button className="import-button" disabled={activeRecording||!engineReady} onClick={()=>setImportOpen(true)}>{importBusy?<LoaderCircle className="spin" size={15}/>:<Plus size={15}/>} {importBusy?'正在处理素材':'导入图片 / 3D 模型'}<span>PNG · JPG · GLB</span></button>
+      <button className="ding-demo-button" disabled={activeRecording||importBusy||!engineReady} onClick={loadDingDemo}><Box size={14}/>青铜方鼎展示<Play size={12}/></button>
       <div className="source-meta"><span>实际粒子</span><b>{state.actualCount.toLocaleString()} <small>个</small></b></div>
       {state.actualCount<params.count&&<p className="stage-note">有效采样区域只生成 {state.actualCount.toLocaleString()} 个粒子。</p>}
       {asset.notes.length>0&&<div className="asset-notes">{asset.notes.map((note,i)=><p key={i}>{note}</p>)}</div>}
@@ -276,6 +306,7 @@ export default function App() {
       {importState.status==='error'&&<div className="import-error" role="alert"><strong>未能导入 {importState.name}</strong><p>{importState.error}</p><small>原有素材已保留，可重新选择文件。</small></div>}
       <div className="import-formats"><div><Image size={18}/><b>图片</b><p>保留宽高比和原色。透明区域自动过滤；JPG 保留背景。</p></div><div><Box size={18}/><b>静态 3D 模型</b><p>GLB 多网格表面采样。支持基色、顶点色与基础色贴图。</p></div></div>
       <div className="example-heading"><span>先试试示例</span><small>无需准备文件</small></div><div className="example-grid"><div><button disabled={activeRecording} onClick={()=>example('/examples/color-flower.png','color-flower.png')}><img src="/examples/color-flower.png" alt="粉色花瓣与黄色花蕊的透明花朵"/><span><b>彩色花朵</b><small>透明 PNG / 原色粒子</small></span><ArrowUpRight size={17}/></button><a href="/examples/color-flower.png" download>下载图片 <ArrowDownToLine size={12}/></a></div><div><button disabled={activeRecording} onClick={()=>example('/examples/sample-sphere.glb','sample-sphere.glb')}><span className="model-example"><Box size={33}/></span><span><b>三维组合</b><small>GLB / 多网格与颜色</small></span><ArrowUpRight size={17}/></button><a href="/examples/sample-sphere.glb" download>下载模型 <ArrowDownToLine size={12}/></a></div></div>
+      <div className="reference-example ding-example"><button disabled={activeRecording||importBusy} onClick={loadDingDemo}><img src="/examples/ding-reference.jpg" alt="青铜方鼎正视参考图"/><span><b>青铜方鼎 · 三维粒子展示</b><small>青铜原色 / 四足双耳 / 16 秒聚散动画</small></span><Play size={17}/></button><a href="/examples/ding-model.glb" download="Bronze_Ding.glb">下载青铜方鼎 GLB <ArrowDownToLine size={13}/></a></div>
       <div className="reference-example lily-example"><button disabled={activeRecording} onClick={loadLilyDemo}><img src="/examples/lily-reference.jpg" alt="用于彩色百合模型的参考照片"/><span><b>你的百合 · 彩色 3D 模型</b><small>参考照片的立体近似 · 原色 / 12 秒动画</small></span><Play size={17}/></button><a href="/examples/lily-model.glb" download="Particle_Lily.glb">下载彩色 GLB 模型 <ArrowDownToLine size={13}/></a></div>
       <div className="reference-example"><button disabled={activeRecording} onClick={loadReferenceDemo}><img src="/examples/particle-flower-reference.jpg" alt="你提供的彩色流线花朵"/><span><b>你的参考图 · 图片展示</b><small>原色粒子 · 12 秒聚散 / 缩放 / 旋转动画</small></span><Play size={17}/></button></div>
       <div className="import-footer"><span>素材在浏览器本地处理</span><button disabled={activeRecording} onClick={()=>runImport('粒子球体',async()=>createSphereAsset())}><RotateCcw size={12}/>恢复内置球体</button></div>
