@@ -1,0 +1,174 @@
+<!doctype html>
+<html lang="zh-CN">
+<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>粒子质感与自动数量 · 实测</title>
+<style>
+*{box-sizing:border-box}body{margin:0;background:#111118;color:#dedeea;font:13px/1.7 'Microsoft YaHei',sans-serif}main{max-width:1180px;margin:auto;padding:20px}h1{margin:0;font-size:23px}p{color:#a3a3ba;margin:8px 0 14px}button{font:inherit;border:1px solid #454559;border-radius:6px;background:#282835;color:#ddddeb;padding:8px 13px;cursor:pointer}button:disabled{opacity:.4;cursor:wait}#run{background:#d5f7a1;border-color:#d5f7a1;color:#26331c}.controls{display:flex;gap:8px;flex-wrap:wrap;margin:12px 0}#status{color:#d5f7a1;min-height:28px}#stage{height:430px;background:#000;border:1px solid #363645;border-radius:7px;display:flex;align-items:center;justify-content:center;overflow:hidden}#stage canvas{max-width:100%;max-height:100%}#live{min-height:24px;font:12px/1.7 monospace;color:#aaaac3}video{display:block;width:100%;max-height:430px;margin-top:14px;background:#000}video[hidden]{display:none}a{color:#d5f7a1}#links{display:flex;gap:14px;flex-wrap:wrap;margin:10px 0}pre{background:#1b1b25;padding:14px;white-space:pre-wrap;font:11px/1.6 monospace;max-height:430px;overflow:auto}summary{cursor:pointer;color:#aaaac0}.note{font-size:11px;color:#7c7c96}@media(max-width:800px){#stage{height:320px}}
+</style></head>
+<body><main>
+<h1>粒子质感与设备自适应数量 · 真实验证</h1>
+<p>复用一个渲染器检查真实 PNG / JPG 与方鼎 GLB 的原色、Bloom、卷曲和亮核；检查手动 180,000 / 300,000 / 500,000 粒子与小图上限，再观察至少 60 秒自动数量。最后录制至少 11 秒有效 720p 画面，暂停约 1.5 秒。完整运行约 90 秒，请保持此页可见。</p>
+<button id="run">运行质感与自动数量验证</button><div id="status" role="status">尚未运行，不预填通过数、设备数量或 FPS。</div>
+<div class="controls" id="views"><button data-view="assembled" disabled>聚合原色</button><button data-view="mid" disabled>半消散</button><button data-view="flow" disabled>卷曲细流</button><button data-view="ding" disabled>方鼎原色</button><button data-view="jpg" disabled>参考图片</button><button data-view="pause" disabled>暂停 / 继续</button><button data-view="bloom" disabled>Bloom 开关对照</button><button data-view="auto" disabled>自动数量</button></div>
+<div id="stage"></div><div id="live"></div><video id="video" controls playsinline muted preload="metadata" hidden></video><div id="links"></div>
+<p class="note">仅供本地 Vite 开发。一个真实渲染器，不创建截图图库；录像时不读像素、不生成 PNG，状态每秒小更新。不调用自动下载工具。真实视频 / 报告通过现有 /__qa 保存到 artifacts/browser-test.*，请先备份旧证据。渲染 FPS、实际编码 FPS 与有效像素上限分别记录。</p>
+<details><summary>本次原始结果</summary><pre id="report">尚未运行。</pre></details>
+</main><script type="module">
+import { ParticleEngine, DEFAULT_PARAMS } from '/src/ParticleEngine.ts';
+import { CanvasRecorder } from '/src/CanvasRecorder.ts';
+import { loadParticleAsset } from '/src/assets.ts';
+
+const $=selector=>document.querySelector(selector),ui={run:$('#run'),status:$('#status'),live:$('#live'),stage:$('#stage'),video:$('#video'),links:$('#links'),report:$('#report')};
+const viewButtons=[...document.querySelectorAll('#views button')];
+const wait=ms=>new Promise(resolve=>setTimeout(resolve,ms));
+const near=(a,b,tolerance=1e-7)=>Math.abs(a-b)<=tolerance;
+const average=list=>list.length?list.reduce((sum,value)=>sum+value,0)/list.length:null;
+const clip={duration:12,keyframes:[
+ {id:'start',time:0,scale:1,rotation:[0,0,0],progress:0},
+ {id:'hold',time:1.8,scale:1,rotation:[0,0,0],progress:0},
+ {id:'flow',time:5,scale:1.05,rotation:[0,8,-4],progress:.64},
+ {id:'fade',time:6.8,scale:1.08,rotation:[0,12,-6],progress:1},
+ {id:'fade-hold',time:7.5,scale:1.08,rotation:[0,12,-6],progress:1},
+ {id:'return',time:10.8,scale:1,rotation:[0,0,0],progress:0},
+ {id:'end',time:12,scale:1,rotation:[0,0,0],progress:0},
+]};
+const appearance={...DEFAULT_PARAMS,autoCount:false,count:60000,colorMode:'original',size:1.7,opacity:.92,glow:.7,exposure:1.55,contrast:1.05,curl:1.8,sparkle:.35,spread:1.15,turbulence:.18,depth:1.35,scatter:.18,stagger:.5,motionSpeed:.55,erosion:.72,flowScale:1.5,stringiness:2.2,trail:.65,fade:false,direction:'y',autoRotate:false,playbackRate:1};
+let engine=null,recorder=null,latest=null,report=null,assets={},busy=false,timer=null,phase='idle',visibilityEvents=[],recordCounts=[];
+const setStatus=text=>{ui.status.textContent=text;};
+const publish=()=>{ui.report.textContent=JSON.stringify(report,null,2);};
+function check(name,pass,detail,critical=true){report.checks.push({name,pass:Boolean(pass),detail});if(!pass&&critical)throw new Error(name+'：'+JSON.stringify(detail));}
+function stopTimer(){if(timer)clearInterval(timer);timer=null;}
+function cleanup(){stopTimer();recorder?.destroy();engine?.setCaptureActive?.(false);engine?.setRecordingLocked?.(false);engine?.destroy();engine=null;recorder=null;latest=null;assets={};}
+window.addEventListener('beforeunload',cleanup);
+document.addEventListener('visibilitychange',()=>{if(busy)visibilityEvents.push({at:new Date().toISOString(),hidden:document.hidden,phase});});
+async function post(path,body,type){const response=await fetch(path,{method:'POST',headers:{'Content-Type':type,'X-Particle-QA':'1'},body});const data=await response.json();if(!response.ok)throw new Error(data.error||'QA 保存失败');return data;}
+async function saveReport(){const full=JSON.stringify(report),bytes=new TextEncoder().encode(full).byteLength;let saved=report;if(bytes>48*1024){saved={...report,checks:report.checks.map(({name,pass,detail})=>({name,pass,detail:JSON.stringify(detail??null).length<=240?detail:'完整逐项详情见页面原始报告；相关原始指标保留在 images / ding / appearance / autoCount / recording。'})),storageNote:{fullPageReportBytes:bytes,reason:'现有QA接口限制50KiB；仅压缩重复check.detail，保留原始数据集。'}};}return post('/__qa/report',JSON.stringify(saved),'application/json');}
+async function frames(count=3){await Promise.race([new Promise(resolve=>{const step=()=>--count<=0?resolve():requestAnimationFrame(step);requestAnimationFrame(step);}),wait(5000).then(()=>{throw new Error('画面帧等待超时；请保持页面可见。');})]);}
+function front(degrees=0){const radians=degrees*Math.PI/180,distance=5.7;engine.controls.enableDamping=false;engine.camera.position.set(Math.sin(radians)*distance,.08,Math.cos(radians)*distance);engine.controls.target.set(0,0,0);engine.controls.update(0);engine.controls.enableDamping=true;engine.needsRendering=true;}
+function useAsset(id='jpg'){engine.setRunning(false);engine.setAsset(assets[id]);engine.setParams(appearance);engine.setTimeline(clip);engine.seekTimeline(0);engine.setEffect('erosion');front();}
+async function pixels(retainPixels){
+ await frames();const gl=engine.canvas.getContext('webgl2');if(!gl)throw new Error('无法读取最终 WebGL2 画布。');
+ const width=engine.canvas.width,height=engine.canvas.height,data=new Uint8Array(width*height*4);gl.readPixels(0,0,width,height,gl.RGBA,gl.UNSIGNED_BYTE,data);if(gl.getError()!==gl.NO_ERROR)throw new Error('读取最终画布像素失败。');
+ let sum=0,squared=0,lit=0,peak=0,clipped=0;for(let i=0;i<data.length;i+=4){const value=(data[i]*.2126+data[i+1]*.7152+data[i+2]*.0722)/255;sum+=value;squared+=value*value;peak=Math.max(peak,value);if(Math.max(data[i],data[i+1],data[i+2])>3)lit++;if(value>.98)clipped++;}
+ const count=width*height,mean=sum/count,digest=await crypto.subtle.digest('SHA-256',data);
+ if(retainPixels)retainPixels(data);
+ return {sha256:[...new Uint8Array(digest)].map(value=>value.toString(16).padStart(2,'0')).join(''),meanLuminance:mean,luminanceDeviation:Math.sqrt(Math.max(0,squared/count-mean*mean)),litPixels:lit,peakLuminance:peak,clippedPixels:clipped};
+}
+function compareRGB(before,after){
+ if(!(before instanceof Uint8Array)||!(after instanceof Uint8Array)||before.length!==after.length||before.length%4)throw new Error('方鼎RGB比较缺少等尺寸真实画布像素。');
+ let changedChannels=0,maxDelta=0,totalDelta=0;for(let offset=0;offset<before.length;offset+=4)for(let channel=0;channel<3;channel++){const delta=Math.abs(before[offset+channel]-after[offset+channel]);if(delta)changedChannels++;maxDelta=Math.max(maxDelta,delta);totalDelta+=delta;}
+ const comparedChannels=before.length/4*3;return {comparedChannels,changedChannels,maxDelta,meanAbsoluteDelta:totalDelta/comparedChannels,normalizedMaxDelta:maxDelta/255,normalizedMeanAbsoluteDelta:totalDelta/comparedChannels/255,deltaUnit:'8-bit RGB channel level; one level equals 1/255',allowedChangedChannels:64,allowedMaxDelta:1,withinTolerance:changedChannels<=64&&maxDelta<=1};
+}
+function environment(){const gl=engine.canvas.getContext('webgl2'),ext=gl?.getExtension('WEBGL_debug_renderer_info');return {browser:navigator.userAgent,platform:navigator.platform,cpuThreads:navigator.hardwareConcurrency,deviceMemoryGB:navigator.deviceMemory??null,deviceMemoryNote:'浏览器估计，未确认实际物理内存',viewport:[innerWidth,innerHeight],devicePixelRatio,output:[engine.canvas.width,engine.canvas.height],gpu:gl?{renderer:gl.getParameter(ext?ext.UNMASKED_RENDERER_WEBGL:gl.RENDERER),vendor:gl.getParameter(ext?ext.UNMASKED_VENDOR_WEBGL:gl.VENDOR),version:gl.getParameter(gl.VERSION)}:null};}
+function countSnapshot(){const state=engine.state;return {seconds:(performance.now()-report.clockStart)/1000,fps:state.fps,actualCount:state.actualCount,drawCount:engine.geometry.drawRange.count,autoCount:engine.params.autoCount,requestedCeiling:engine.params.count,adaptiveCeiling:state.adaptiveCeiling,adaptiveStatus:state.adaptiveStatus,frameMsAvg:state.frameMsAvg,progress:state.progress,running:state.running,phase};}
+function startLive(){timer=setInterval(()=>{if(!report||!engine)return;const sample=countSnapshot();if(document.hidden)report.hiddenDuringTest=true;if(phase==='auto')report.autoCount.samples.push({seconds:Number(sample.seconds.toFixed(3)),fps:sample.fps,actualCount:sample.actualCount,drawCount:sample.drawCount,autoCount:sample.autoCount,adaptiveCeiling:sample.adaptiveCeiling,adaptiveStatus:sample.adaptiveStatus,frameMsAvg:Number(sample.frameMsAvg.toFixed(3))});if(['recording','recording-pause','processing'].includes(phase)){recordCounts.push(sample);if(phase==='recording'&&sample.fps>0)report.renderFPS.recording.push(sample.fps);}if(phase==='editing'&&engine.state.running&&sample.fps>0)report.renderFPS.editing.push(sample.fps);ui.live.textContent='阶段 '+phase+' · 实际 '+sample.actualCount.toLocaleString()+' 粒子 · 渲染 '+Math.round(sample.fps)+' FPS · '+(sample.adaptiveStatus||'')+(recorder?' · 有效录像 '+recorder.state.elapsed.toFixed(2)+' 秒':'');},1000);}
+async function until(predicate,timeout,label){const started=performance.now();while(!predicate()){if(performance.now()-started>timeout)throw new Error(label+'超时');if(recorder?.state.status==='error')throw new Error(recorder.state.error||'录制失败');await wait(80);}}
+function mediaEvent(name,action,timeout=12000){return new Promise((resolve,reject)=>{const timer=setTimeout(()=>done(new Error('播放器等待 '+name+' 超时')),timeout),success=()=>done(),failure=()=>done(new Error('视频读取失败'));function done(error){clearTimeout(timer);ui.video.removeEventListener(name,success);ui.video.removeEventListener('error',failure);error?reject(error):resolve();}ui.video.addEventListener(name,success,{once:true});ui.video.addEventListener('error',failure,{once:true});try{action();}catch(error){done(error);}});}
+async function tinyImage(){const canvas=document.createElement('canvas');canvas.width=16;canvas.height=12;const context=canvas.getContext('2d');context.fillStyle='#e885d2';context.fillRect(4,3,8,6);const blob=await new Promise((resolve,reject)=>canvas.toBlob(blob=>blob?resolve(blob):reject(new Error('微型 PNG 生成失败')),'image/png'));try{return await loadParticleAsset(new File([blob],'tiny-48-valid-pixels.png',{type:'image/png'}));}finally{canvas.width=canvas.height=1;}}
+async function verifyImages(){
+ report.images={};for(const id of ['png','jpg']){
+  setStatus('检查真实 '+id.toUpperCase()+'：原色、六种效果、反向原形…');useAsset(id);const asset=assets[id],baseline=await pixels(),effectImages={};
+  report.images[id]={name:asset.name,poolCount:asset.count,hasOriginalColors:asset.hasOriginalColors,notes:asset.notes,baseline};
+  check(id+' 原色采样与最终画布有效',asset.hasOriginalColors&&baseline.litPixels>100&&engine.geometry.getAttribute('aColor').array===asset.colors,report.images[id]);
+  engine.setParams({colorMode:'uniform',color:'#ffffff'});const uniform=await pixels();engine.setParams({colorMode:'original'});const original=await pixels();
+  check(id+' 原色与统一色实际不同且可还原',uniform.sha256!==baseline.sha256&&original.sha256===baseline.sha256,{uniform,original});
+  for(const effect of ['radial','noise','vortex','directional','wave','erosion']){engine.setProgress(0);engine.setEffect(effect);engine.setProgress(.58);effectImages[effect]=await pixels();engine.setProgress(0);const restored=await pixels();check(id+' '+effect+' 归零精准还原',restored.sha256===baseline.sha256&&!engine.trails.visible,{restored:restored.sha256,baseline:baseline.sha256,trailsVisible:engine.trails.visible});}
+  report.images[id].effectImages=effectImages;check(id+' 六效果真实画面不同',new Set(Object.values(effectImages).map(image=>image.sha256)).size===6,Object.fromEntries(Object.entries(effectImages).map(([key,value])=>[key,value.sha256])));
+ }
+ check('JPG 稳定采样池提高到 500,000',assets.jpg.count===500000,{count:assets.jpg.count});
+}
+async function verifyDing(){
+ setStatus('读取真实青铜方鼎 GLB 并检查 500,000 稳定采样与贴图原色…');
+ const response=await fetch('/examples/ding-model.glb');if(!response.ok)throw new Error('真实方鼎 GLB 读取失败。');assets.ding=await loadParticleAsset(new File([await response.blob()],'ding-model.glb',{type:'model/gltf-binary'}));
+ const asset=assets.ding,coarseColors=new Set();let finite=true,min=Infinity,max=-Infinity,lumaSum=0,lumaSquared=0,nonNeutral=0;
+ for(let i=0;i<asset.colors.length;i+=3){const r=asset.colors[i],g=asset.colors[i+1],b=asset.colors[i+2];finite&&=[r,g,b].every(Number.isFinite);min=Math.min(min,r,g,b);max=Math.max(max,r,g,b);const luma=r*.2126+g*.7152+b*.0722;lumaSum+=luma;lumaSquared+=luma*luma;if(Math.max(r,g,b)-Math.min(r,g,b)>.01)nonNeutral++;coarseColors.add([r,g,b].map(value=>Math.round(Math.max(0,Math.min(1,value))*63)).join(','));}
+ const mean=lumaSum/asset.count,colorStats={finite,min,max,coarseRGBCount:coarseColors.size,nonNeutralPixels:nonNeutral,luminanceDeviation:Math.sqrt(Math.max(0,lumaSquared/asset.count-mean*mean))},fallbackNotes=asset.notes.filter(note=>/贴图.*(?:无法|回退)|基础颜色.*回退/.test(note));
+ report.ding={name:asset.name,kind:asset.kind,count:asset.count,hasOriginalColors:asset.hasOriginalColors,notes:asset.notes,colors:colorStats,fallbackNotes,retainedArrayBytes:asset.positions.byteLength+asset.colors.byteLength+asset.seeds.byteLength};
+ check('真实方鼎采样500,000且保留原色',asset.kind==='model'&&asset.count===500000&&asset.hasOriginalColors,report.ding);
+ check('方鼎纹理不是默认白色或单色回退',finite&&coarseColors.size>=12&&colorStats.luminanceDeviation>1e-5&&nonNeutral>100&&fallbackNotes.length===0,{colors:colorStats,fallbackNotes});
+ useAsset('ding');const sourceArrays={position:engine.geometry.getAttribute('position').array,color:engine.geometry.getAttribute('aColor').array,seed:engine.geometry.getAttribute('aSeed').array};
+ const sourceUnchanged=()=>({position:engine.geometry.getAttribute('position').array===sourceArrays.position&&sourceArrays.position===asset.positions,color:engine.geometry.getAttribute('aColor').array===sourceArrays.color&&sourceArrays.color===asset.colors,seed:engine.geometry.getAttribute('aSeed').array===sourceArrays.seed&&sourceArrays.seed===asset.seeds,progressZero:engine.state.progress===0,trailsOff:engine.trails.visible===false,originalColorMode:engine.material.uniforms.uOriginalColor.value===1});
+ // Keep at most three real RGBA arrays locally; only numerical RGB differences
+ // enter the report. Alpha is deliberately excluded from the channel count.
+ let originalPixels=null,whitePixels=null,restoredPixels=null;
+ try{
+  const original=await pixels(data=>{originalPixels=data;});engine.setParams({colorMode:'uniform',color:'#ffffff'});const white=await pixels(data=>{whitePixels=data;});engine.setParams({colorMode:'original'});const restoredColor=await pixels(data=>{restoredPixels=data;});
+  const whiteDifference=compareRGB(originalPixels,whitePixels),colorRestoreDifference=compareRGB(originalPixels,restoredPixels),colorSource=sourceUnchanged();
+  report.ding.colorRestore={original,white,restored:restoredColor,whiteDifference,colorRestoreDifference,sourceArrays:colorSource};
+  whitePixels=null;restoredPixels=null;
+  check('方鼎贴图原色实际进入最终画布',original.litPixels>100&&whiteDifference.changedChannels>64&&colorRestoreDifference.withinTolerance&&Object.values(colorSource).every(Boolean),report.ding.colorRestore);
+  engine.setProgress(.58);const middle=await pixels();engine.setProgress(0);const restored=await pixels(data=>{restoredPixels=data;}),geometryRestoreDifference=compareRGB(originalPixels,restoredPixels),geometrySource=sourceUnchanged();restoredPixels=null;originalPixels=null;
+  front(65);const side=await pixels();front();
+  report.ding.frames={original,middle,side,restored,geometryRestoreDifference,sourceArrays:geometrySource};check('方鼎原形与空间中间态不同且可逆',middle.sha256!==original.sha256&&geometryRestoreDifference.withinTolerance&&Object.values(geometrySource).every(Boolean),report.ding.frames);check('方鼎侧面保持实际立体轮廓',side.litPixels>100&&side.sha256!==original.sha256,{side,front:original});
+ }finally{originalPixels=null;whitePixels=null;restoredPixels=null;}
+}
+async function verifyAppearance(){
+ setStatus('检查最终画布 Bloom、曝光、对比、卷曲与亮核…');useAsset('jpg');engine.setProgress(.58);report.appearance={};
+ // Glow also changes point size/core in the product shader. Hold that uniform
+ // fixed here, so a larger point cannot falsely pass a broken Bloom pipeline.
+ const fixedShaderGlow=.7;
+ engine.setParams({glow:0,exposure:1,contrast:1,sparkle:.35});engine.material.uniforms.uGlow.value=fixedShaderGlow;const bloomOff=await pixels();
+ engine.setParams({glow:1.25});engine.material.uniforms.uGlow.value=fixedShaderGlow;const bloomOn=await pixels();report.appearance.bloom={fixedShaderGlow,off:bloomOff,on:bloomOn};
+ check('Bloom 开关改变最终画布并增加亮度',bloomOn.sha256!==bloomOff.sha256&&bloomOn.meanLuminance>bloomOff.meanLuminance,report.appearance.bloom);
+ engine.setParams({glow:.65,exposure:.55});const lowExposure=await pixels();engine.setParams({exposure:1.8});const highExposure=await pixels();report.appearance.exposure={low:lowExposure,high:highExposure};
+ check('曝光真实提高画布亮度',highExposure.sha256!==lowExposure.sha256&&highExposure.meanLuminance>lowExposure.meanLuminance,report.appearance.exposure);
+ engine.setParams({exposure:1.3,contrast:.65});const lowContrast=await pixels();engine.setParams({contrast:1.65});const highContrast=await pixels();report.appearance.contrast={low:lowContrast,high:highContrast};
+ check('对比度改变真实亮度分布',lowContrast.sha256!==highContrast.sha256&&!near(lowContrast.luminanceDeviation,highContrast.luminanceDeviation,1e-8),report.appearance.contrast);
+ engine.setParams({contrast:1,curl:0});const noCurl=await pixels();engine.setParams({curl:2.3});const curl=await pixels();report.appearance.curl={off:noCurl,on:curl};
+ check('卷曲参数改变实际轨迹画面',noCurl.sha256!==curl.sha256,report.appearance.curl);
+ engine.setParams({curl:1.2,sparkle:0});const noCore=await pixels();engine.setParams({sparkle:.85});const core=await pixels();report.appearance.sparkle={off:noCore,on:core};
+ check('亮核参数进入最终渲染',noCore.sha256!==core.sha256,report.appearance.sparkle);
+ engine.setParams(appearance);engine.setProgress(0);const origin=await pixels();engine.setProgress(.7);await pixels();engine.setProgress(0);const restored=await pixels();check('发光后处理与流场反向归零无残留',origin.sha256===restored.sha256,{origin:origin.sha256,restored:restored.sha256});
+ engine.setParams({fade:true});engine.setProgress(1);const faded=await pixels();report.appearance.faded=faded;check('末段淡出同时消除粒子轨迹与Bloom',faded.litPixels===0&&faded.meanLuminance===0,faded);
+ engine.setParams({fade:false});engine.seekTimeline(4);engine.setTimelinePlaying(true);await wait(650);engine.setRunning(false);const before=engine.state,pauseA=await pixels();await wait(450);const after=engine.state,pauseB=await pixels();report.pause={timeBefore:before.time,timeAfter:after.time,timelineBefore:before.timelineTime,timelineAfter:after.timelineTime,hashBefore:pauseA.sha256,hashAfter:pauseB.sha256};check('暂停冻结细流亮核与发光画面',before.time===after.time&&before.timelineTime===after.timelineTime&&pauseA.sha256===pauseB.sha256,report.pause);
+}
+async function verifyCounts(){
+ setStatus('检查手动高数量与微型图片有效上限…');useAsset('jpg');report.manualCounts=[];
+ for(const requested of [180000,300000,500000]){engine.setParams({autoCount:false,count:requested});engine.setProgress(.4);await frames();const actual=countSnapshot();report.manualCounts.push(actual);check('手动 '+requested.toLocaleString()+' 真实绘制',actual.autoCount===false&&actual.actualCount===requested&&actual.drawCount===requested,actual);}
+ assets.tiny=await tinyImage();engine.setAsset(assets.tiny);engine.setParams({autoCount:false,count:300000});await frames();const small=countSnapshot();report.smallImage={validPixels:48,poolCount:assets.tiny.count,notes:assets.tiny.notes,...small};check('小图不复制像素冒充高数量',assets.tiny.count===48&&small.actualCount===48&&small.drawCount===48,report.smallImage);
+ useAsset('jpg');engine.setParams({autoCount:true,count:300000});engine.setTimelineLoop(true);engine.setTimelinePlaying(true);phase='auto';report.autoCount={startedAt:new Date().toISOString(),sourcePool:assets.jpg.count,ceilingRequested:300000,initial:countSnapshot(),samples:[],notes:['本机自然运行至少60秒，不要求必须上调到某个数量。','上调和降压策略的确定性回归由独立纯函数测试补充。']};setStatus('活动自动数量跟踪至少 60 秒：按实际设备表现记录，不预设必定升高…');const started=performance.now();await wait(60500);phase='checks';report.autoCount.wallSeconds=(performance.now()-started)/1000;report.autoCount.final=countSnapshot();report.autoCount.completedAt=new Date().toISOString();
+ const samples=report.autoCount.samples;check('至少60秒自动调度有真实活动样本',report.autoCount.wallSeconds>=60&&samples.length>=55&&samples.every(sample=>sample.autoCount===true)&&samples.some(sample=>Number.isFinite(sample.frameMsAvg)&&sample.frameMsAvg>0),{seconds:report.autoCount.wallSeconds,sampleCount:samples.length,initial:report.autoCount.initial,final:report.autoCount.final});
+ check('自动数量尊重真实素材与请求上限',samples.every(sample=>sample.actualCount>0&&sample.actualCount<=Math.min(300000,assets.jpg.count)&&sample.drawCount===sample.actualCount),{checkedSamples:samples.length,sourceCapacity:assets.jpg.count,requestedCeiling:300000,minimumObserved:Math.min(...samples.map(sample=>sample.actualCount)),maximumObserved:Math.max(...samples.map(sample=>sample.actualCount))});
+ report.autoCount.distinctCounts=[...new Set(samples.map(sample=>sample.actualCount))];report.autoCount.movementObserved=report.autoCount.distinctCounts.length>1;report.autoCount.averageRenderFPS=average(samples.filter(sample=>sample.fps>0).map(sample=>sample.fps));
+ phase='editing';setStatus('采样 3 秒当前设备自动数量下的活动编辑帧率…');await wait(3100);phase='checks';
+}
+async function record(){
+ setStatus('录制至少 11 秒有效画面；参考默认 Bloom 与轨迹进入视频，数量保持冻结…');engine.setParams({fade:true});engine.setTimeline(clip);engine.seekTimeline(0);engine.setEffect('erosion');engine.setTimelineLoop(true);engine.setTimelinePlaying(true);engine.setRecordingLocked(true);
+ const before=countSnapshot();recordCounts=[];let resolveResult,rejectResult,previousRunning=false;const ready=new Promise((resolve,reject)=>{resolveResult=resolve;rejectResult=reject;});ready.catch(()=>{});const watchdog=setTimeout(()=>rejectResult(new Error('等待视频最终编码数据超时')),40000);
+ recorder=new CanvasRecorder(engine.canvas,state=>{engine.setRecordingLocked(['recording','paused','processing'].includes(state.status));engine.setCaptureActive(state.status==='recording');if(state.status==='ready')resolveResult(state.result);if(state.status==='error')rejectResult(new Error(state.error||'视频编码失败'));},paused=>{if(paused){previousRunning=engine.state.running;engine.setRunning(false);}else engine.setRunning(previousRunning);});
+ try{
+  if(!recorder.supported)throw new Error('当前浏览器不支持真实画布录制。');recorder.setProjectName('Expressive_Particles');const started=performance.now();phase='recording';recorder.start('high');check('真实MediaRecorder成功开始',recorder.state.status==='recording',{status:recorder.state.status,mimeType:recorder.mimeType});const afterStart=countSnapshot();check('开始捕获前后实际数量不变',before.actualCount===afterStart.actualCount&&afterStart.drawCount===before.actualCount,{before,afterStart});
+  await until(()=>recorder.state.elapsed>=5.5,18000,'第一段录制');phase='recording-pause';recorder.pause();const pauseStarted=performance.now(),elapsedBefore=recorder.state.elapsed,stateBefore=engine.state;await wait(1500);const stateAfter=engine.state;report.recordingPause={wallSeconds:(performance.now()-pauseStarted)/1000,elapsedBefore,elapsedAfter:recorder.state.elapsed,countBefore:stateBefore.actualCount,countAfter:stateAfter.actualCount,timeBefore:stateBefore.time,timeAfter:stateAfter.time,timelineBefore:stateBefore.timelineTime,timelineAfter:stateAfter.timelineTime};
+  check('录制暂停不计时并冻结运动和数量',recorder.state.status==='paused'&&elapsedBefore===recorder.state.elapsed&&stateBefore.time===stateAfter.time&&stateBefore.timelineTime===stateAfter.timelineTime&&stateBefore.actualCount===stateAfter.actualCount,report.recordingPause);
+  recorder.resume();phase='recording';check('恢复录像延续原动画状态',recorder.state.status==='recording'&&engine.state.running,{recorder:recorder.state.status,running:engine.state.running});await until(()=>recorder.state.elapsed>=11.15,18000,'第二段录制');phase='processing';const stopAt=performance.now();recorder.stop();const result=await ready;engine.setRunning(false);engine.setRecordingLocked(false);engine.setCaptureActive(false);
+  report.recording={effectiveDurationSeconds:result.duration,wallDurationSeconds:(stopAt-started)/1000,finalizationSeconds:(performance.now()-stopAt)/1000,width:result.width,height:result.height,bytes:result.blob.size,mimeType:result.mimeType,extension:result.extension,filename:result.filename,targetFPS:30,videoEncodingFPS:null,encodingNote:'由最终真实视频样本另行解析，不能用渲染FPS代替。',requestedBitrate:12000000,audio:false,params:engine.params,frozenCount:before.actualCount,countBefore:before,countAfter:countSnapshot(),countSamples:recordCounts};
+  check('整段录制和暂停保持真实密度',recordCounts.length>=9&&recordCounts.every(sample=>sample.actualCount===before.actualCount&&sample.drawCount===before.actualCount)&&engine.state.actualCount===before.actualCount,{frozenCount:before.actualCount,samples:recordCounts.map(sample=>({phase:sample.phase,count:sample.actualCount,draw:sample.drawCount}))});
+  check('至少11秒有效720p且暂停排除',result.duration>=11&&result.width===1280&&result.height===720&&report.recording.wallDurationSeconds-result.duration>=1.45&&near(report.recording.wallDurationSeconds-result.duration,report.recordingPause.wallSeconds,.35),{duration:result.duration,wall:report.recording.wallDurationSeconds,pause:report.recordingPause.wallSeconds,width:result.width,height:result.height});return result;
+ }finally{clearTimeout(watchdog);engine?.setRecordingLocked(false);engine?.setCaptureActive(false);}
+}
+async function player(result){
+ phase='player';setStatus('保存真实视频并检查尺寸、中段定位、播放与暂停…');report.recording.saved=await post('/__qa/video',result.blob,result.mimeType);ui.video.hidden=false;await mediaEvent('loadedmetadata',()=>{ui.video.src='/__qa/video?expressive='+Date.now();ui.video.load();});report.player={duration:ui.video.duration,width:ui.video.videoWidth,height:ui.video.videoHeight};check('最终发光视频真实尺寸正确',ui.video.videoWidth===1280&&ui.video.videoHeight===720,report.player);const target=(Number.isFinite(ui.video.duration)?ui.video.duration:result.duration)/2;await mediaEvent('seeked',()=>{ui.video.currentTime=target;});report.player.seekTime=ui.video.currentTime;check('同一保存文件可以中段seek',near(target,ui.video.currentTime,.3)&&ui.video.currentTime>4,report.player);
+ try{const before=ui.video.currentTime;await ui.video.play();await wait(400);ui.video.pause();report.player.playback={before,after:ui.video.currentTime,paused:ui.video.paused};check('同一视频可以播放暂停',ui.video.currentTime>before&&ui.video.paused,report.player.playback,false);}catch(error){report.player.playbackError=error.message;check('同一视频可以播放暂停',false,'浏览器拒绝自动播放，需使用原生控件手动复核：'+error.message,false);}
+ check('媒体有效时长不包含暂停',Number.isFinite(ui.video.duration)&&near(ui.video.duration,result.duration,.5),{media:ui.video.duration,effective:result.duration},false);const link=document.createElement('a');link.href=result.url;link.download=result.filename;link.textContent='下载本次真实录像';ui.links.append(link);const reportLink=document.createElement('a');reportLink.href='/__qa/report';reportLink.target='_blank';reportLink.textContent='查看原始JSON';ui.links.append(reportLink);
+}
+viewButtons.forEach(button=>button.addEventListener('click',()=>{
+ if(busy||!engine)return;const view=button.dataset.view;if(view==='pause'){engine.setRunning(!engine.state.running);setStatus(engine.state.running?'继续当前运动。':'已暂停；仍可操作视角。');return;}
+ if(view==='bloom'){engine.setParams({glow:engine.params.glow>0?0:appearance.glow});setStatus('Bloom 当前 '+(engine.params.glow>0?'开启':'关闭')+'；曝光和对比保留。');return;}
+ if(view==='ding'||view==='jpg'){if(!assets[view]){setStatus('该素材尚未载入，请先运行完整验证。');return;}useAsset(view);setStatus('已切换真实 '+(view==='ding'?'方鼎 GLB 原色':'参考图片')+'；同一粒子引擎。');return;}
+ if(view==='auto'){engine.setParams({autoCount:true,count:300000});engine.setTimelinePlaying(true);setStatus('自动数量运行中，实际数量与状态见下方。');return;}
+ engine.setRunning(false);engine.setParams({fade:false});engine.seekTimeline(0);engine.setEffect('erosion');if(view==='assembled'){front();engine.setProgress(0);}if(view==='mid'){front(30);engine.setProgress(.5);}if(view==='flow'){front(20);engine.setParams({curl:2,stringiness:2,trail:.6});engine.seekTimeline(4.8);engine.setTimelinePlaying(true);}setStatus(button.textContent+'；可用鼠标旋转、缩放和平移。');
+}));
+ui.run.addEventListener('click',async()=>{
+ if(busy||!import.meta.env.DEV)return;busy=true;ui.run.disabled=true;viewButtons.forEach(button=>button.disabled=true);cleanup();ui.links.replaceChildren();ui.video.pause();ui.video.hidden=true;ui.video.removeAttribute('src');ui.video.load();phase='setup';visibilityEvents=[];
+ report={test:'expressive-particles-auto-count',startedAt:new Date().toISOString(),timeZone:Intl.DateTimeFormat().resolvedOptions().timeZone,clockStart:performance.now(),checks:[],renderFPS:{editing:[],recording:[]},hiddenDuringTest:document.hidden,notes:['真实图片与方鼎GLB复用单一粒子引擎、最终WebGL画布和MediaRecorder；无模拟编码数据。','录像阶段不读像素、不生成PNG，每秒只更新简短状态。','自动数量运行至少60秒并如实记录结果，不要求所有设备必须升高。','静止按需渲染的低FPS不算活动性能失败；录制锁定实际数量，包括录制暂停。','本次为专项短测，不替代5分钟/20次导入/多次录制压力测试。']};
+ try{
+  setStatus('读取真实参考 JPG 和透明花朵 PNG…');for(const source of [{id:'jpg',url:'/examples/particle-flower-reference.jpg'},{id:'png',url:'/examples/color-flower.png'}]){const response=await fetch(source.url);if(!response.ok)throw new Error('读取素材失败：'+source.url);assets[source.id]=await loadParticleAsset(new File([await response.blob()],source.url.split('/').pop()));}
+  engine=new ParticleEngine(ui.stage,state=>{latest=state;},error=>{report.renderError=error;setStatus('渲染错误：'+error);});engine.setRunning(false);check('录制锁与捕获标记分别接入',typeof engine.setRecordingLocked==='function'&&typeof engine.setCaptureActive==='function','setRecordingLocked覆盖recording/paused/processing；setCaptureActive只在写帧时开启');
+  report.environment=environment();report.configuration={appearance,clip,manualRequests:[180000,300000,500000],automaticCeiling:300000,automaticSeconds:60.5,output:[1280,720],targetVideoFPS:30};startLive();
+  await verifyImages();await verifyDing();await verifyAppearance();await verifyCounts();const result=await record();phase='player';await player(result);stopTimer();
+  report.renderFPS.editingAverage=average(report.renderFPS.editing);report.renderFPS.recordingAverage=average(report.renderFPS.recording);report.visibilityEvents=visibilityEvents;check('图形设备未报告错误',!report.renderError,report.renderError??null,false);check('测试页始终可见',!report.hiddenDuringTest&&!visibilityEvents.some(event=>event.hidden),visibilityEvents,false);
+  report.completedAt=new Date().toISOString();report.success=report.checks.every(item=>item.pass);delete report.clockStart;await saveReport();publish();engine.setRunning(false);engine.seekTimeline(0);engine.setParams({fade:false});front();setStatus(report.success?'质感、数量与录像专项检查通过；实际性能和数量见原始报告。':'专项执行结束，部分项目待复核；请展开原始报告。');
+ }catch(error){report.error=error instanceof Error?error.message:String(error);report.success=false;report.failedAt=new Date().toISOString();report.visibilityEvents=visibilityEvents;delete report.clockStart;stopTimer();engine?.setRunning(false);engine?.setRecordingLocked?.(false);engine?.setCaptureActive?.(false);recorder?.clear();setStatus('验证未完成：'+report.error);publish();await saveReport().catch(()=>{});
+ }finally{busy=false;phase='idle';ui.run.disabled=false;ui.run.textContent='重新运行质感与自动数量验证';viewButtons.forEach(button=>button.disabled=!engine);}
+});
+if(!import.meta.env.DEV){ui.run.disabled=true;setStatus('仅供本地开发模式运行。');}
+</script></body></html>

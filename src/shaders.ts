@@ -15,6 +15,9 @@ export const particleVertexShader = /* glsl */ `
   uniform float uStagger;
   uniform float uIsImage;
   uniform float uGlow;
+  uniform float uCurl;
+  uniform float uSparkle;
+  uniform float uDensityOpacity;
   uniform float uMode;
   uniform float uAxis;
   uniform float uOriginalColor;
@@ -31,6 +34,8 @@ export const particleVertexShader = /* glsl */ `
   varying float vShimmer;
   varying float vVisibility;
   varying float vTrailAlpha;
+  varying float vSpark;
+  varying float vDistanceFade;
 
   vec3 flow(vec3 p, float t) {
     return vec3(
@@ -44,6 +49,30 @@ export const particleVertexShader = /* glsl */ `
     if (uAxis < 0.5) return p.yxz;
     if (uAxis > 1.5) return p.xzy;
     return p;
+  }
+
+  // Each component depends on the other two coordinates, so the divergence
+  // is analytically zero. Neighbouring samples follow the same curling field.
+  vec3 curlVelocity(vec3 q, float t) {
+    return vec3(
+      sin(q.y + t * 0.42) - cos(q.z * 1.13 - t * 0.27),
+      sin(q.z * 1.13 + t * 0.31) - cos(q.x * 0.91 + t * 0.23),
+      sin(q.x * 0.91 - t * 0.35) - cos(q.y + t * 0.29)
+    ) * 0.6;
+  }
+
+  vec3 streamlinePosition(vec3 origin, float travel, float t) {
+    vec3 pointOnCurve = origin;
+    float stepLength = travel * (0.22 + uCurl * 0.24);
+    // Two midpoint integration steps, evaluated afresh from the immutable
+    // origin. This makes actual curved trajectories without simulation drift.
+    for (int stepIndex = 0; stepIndex < 2; stepIndex++) {
+      vec3 firstVelocity = curlVelocity(pointOnCurve * uFlowScale, t);
+      vec3 midpoint = pointOnCurve + firstVelocity * stepLength * 0.5;
+      vec3 middleVelocity = curlVelocity(midpoint * uFlowScale, t);
+      pointOnCurve += (middleVelocity + uDirection * 0.32) * stepLength;
+    }
+    return pointOnCurve;
   }
 
   vec3 displace(vec3 original, float p, float t, out float visibility) {
@@ -106,25 +135,20 @@ export const particleVertexShader = /* glsl */ `
       float threshold = 0.22 + field * 0.46 - edge * uErosion * 0.13;
       float local = amount * smoothstep(threshold - 0.1, threshold + 0.2, p);
       float travel = local * 1.35 * uSpread;
-      // Three correlated flow samples approximate a short curved streamline.
-      vec3 first = flow(space, t * 0.72);
-      vec3 second = flow(space + first * 0.8 + uDirection * travel * 0.42, t * 0.72 + 0.45);
-      vec3 third = flow(space + second * 1.2 + uDirection * travel * 0.73, t * 0.72 + 0.9);
-      vec3 streamline = first * 0.42 + second * 0.35 + third * 0.23;
-      displaced += travel * (streamline * (0.72 + uStringiness * 0.34) +
-                            uDirection * (0.3 + uStringiness * 0.14));
-      displaced += third * local * 1.35 * uTurbulence;
+      displaced = streamlinePosition(original, travel * (0.8 + uStringiness * 0.24), t * 0.38);
+      displaced += flow(space * 1.7, t * 0.4) * local * 1.35 * uTurbulence * 0.35;
       visibility = 1.0 - local * uErosion * (0.16 + field * 0.5);
     }
     // Every mode includes independent 3D grain. Without it, a front-facing
     // image can remain a sheet under radial motion or a coherent wind field.
     vec3 grain = randomDirection * (0.35 + aSeed.y * 0.65);
-    displaced += grain * amount * 1.35 * uSpread * uScatter;
+    float coherentWeight = uMode > 4.5 ? mix(1.0, 0.16, clamp(uCurl, 0.0, 1.0)) : 1.0;
+    displaced += grain * amount * 1.35 * uSpread * uScatter * coherentWeight;
     vec3 offset = displaced - original;
     if (uIsImage > 0.5) {
       float coherentDepth = sin(original.x * 1.8 + sin(original.y * 2.3) + t * 0.35) * 0.55 +
                             cos(original.y * 1.7 - original.x * 1.2 - t * 0.27) * 0.45;
-      offset.z += amount * 1.35 * max(uSpread, uTurbulence) * coherentDepth * 0.48;
+      offset.z += amount * 1.35 * max(uSpread, uTurbulence) * coherentDepth * 0.48 * coherentWeight;
     }
     offset.z *= uDepth;
     return original + offset;
@@ -148,13 +172,16 @@ export const particleVertexShader = /* glsl */ `
     // Original RGB is used directly; the uniform mode gets gentle shape lighting.
     vColor = mix(uColor * frontLight, aColor, uOriginalColor);
     vShimmer = 0.82 + 0.18 * aSeed.z;
+    vSpark = step(1.0 - uSparkle * 0.035, aSeed.z);
     vVisibility = visibility;
     vTrailAlpha = smoothstep(0.005, 0.18, uProgress) *
-                  pow(max(0.0, 1.0 - history), 0.7) * uTrail;
+                  pow(max(0.0, 1.0 - history), 1.15) * uTrail *
+                  mix(0.28, 1.0, step(0.8, aSeed.z));
     vec4 viewPosition = modelViewMatrix * vec4(displaced, 1.0);
     gl_Position = projectionMatrix * viewPosition;
     float perspectiveSize = clamp(5.7 / max(0.25, -viewPosition.z), 0.28, 5.0);
-    gl_PointSize = max(1.0, uSize * perspectiveSize * (1.0 + uGlow * 1.8));
+    vDistanceFade = clamp(sqrt(perspectiveSize), 0.4, 1.2) * uDensityOpacity;
+    gl_PointSize = max(1.0, uSize * perspectiveSize * mix(0.9, 1.55, vSpark) * (1.0 + uGlow * 0.3));
   }
 `;
 
@@ -167,23 +194,26 @@ export const particleFragmentShader = /* glsl */ `
   varying float vShimmer;
   varying float vVisibility;
   varying float vTrailAlpha;
+  varying float vSpark;
+  varying float vDistanceFade;
 
   void main() {
     float dissolve = mix(1.0, 1.0 - smoothstep(0.78, 1.0, uProgress), uFade);
     float alpha;
     #ifdef TRAIL
-      alpha = vTrailAlpha * uOpacity * dissolve * vVisibility * 0.25;
+      alpha = vTrailAlpha * uOpacity * dissolve * vVisibility * 0.42;
     #else
       float radius = length(gl_PointCoord - vec2(0.5)) * 2.0;
       if (radius > 1.0) discard;
-      float core = 1.0 - smoothstep(0.06, 0.61, radius);
-      float halo = pow(max(0.0, 1.0 - radius), 2.0) * uGlow * 0.35;
+      float core = 1.0 - smoothstep(0.04, 0.72, radius);
+      float halo = pow(max(0.0, 1.0 - radius), 3.0) * uGlow * 0.08;
       float edge = 1.0 - smoothstep(0.87, 1.0, radius);
       alpha = (core * 0.61 + halo) * edge * uOpacity * vShimmer * dissolve * vVisibility;
     #endif
     if (alpha < 0.001) discard;
-    gl_FragColor = vec4(vColor, alpha);
-    #include <tonemapping_fragment>
-    #include <colorspace_fragment>
+    alpha *= vDistanceFade;
+    // Emit unclamped linear HDR; the final OutputPass alone performs tone
+    // mapping and sRGB encoding after the real bloom convolution.
+    gl_FragColor = vec4(vColor * (1.1 + vSpark * 8.0), alpha);
   }
 `;

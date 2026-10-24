@@ -190,3 +190,22 @@ select{color:#c1c1cc;background:#24242d;border:1px solid #40404c;border-radius:4
 .ding-demo-button{width:100%;display:flex;align-items:center;justify-content:center;gap:7px;border:1px solid #537d70;border-radius:6px;background:#20362e;color:#badbc9;padding:9px 4px;margin-top:8px;font-size:10px}
 .ding-demo-button:hover{background:#2b493d}.ding-demo-button>svg:last-child{margin-left:auto}.ding-demo-button>svg:first-child{margin-right:auto}
 .ding-example{border-color:#6c8260;background:#283329}.ding-example button:hover{background:#354735}.ding-example b{color:#d1dfb4}.ding-example small{color:#a6b59a}.ding-example svg{color:#c5d3a9}.ding-example img{background:#edf0e8}.ding-example a{display:flex;align-items:center;justify-content:center;gap:7px;padding:8px;border-top:1px solid #485d44;font-size:10px;color:#c0cfab}.ding-example a:hover{background:#354735;color:#eef8d9}
+/* Device-adaptive density is a real render budget, independent of its ceiling. */
+.count-mode{margin:3px 0 17px}
+.density-status{padding:12px;border:1px solid #393846;border-radius:7px;background:#1b1c25;margin:8px 0}
+.density-status>div:first-child{display:flex;align-items:center;justify-content:space-between;color:#9290a4;font-size:10px}
+.density-status strong{font-size:17px;color:#d6d4e6;font-weight:500;font-variant-numeric:tabular-nums}
+.density-status strong small{font-size:10px;color:#9492a6}
+.density-status p{color:#a9a6be;font-size:10px;line-height:1.6;margin:7px 0 9px;min-height:16px}
+.density-status.automatic{border-color:#524569;background:linear-gradient(120deg,#242033,#1b1d27)}
+.density-status .density-cap{display:flex;justify-content:space-between;border-top:1px solid #393546;padding-top:8px;font-size:9px;color:#7e7b93}
+.density-cap b{font-weight:400;font-variant-numeric:tabular-nums;color:#a9a4bd}
+.range-control.disabled{opacity:.45}
+
+.density-group{padding-top:17px!important}
+.density-group .group-heading{margin-bottom:12px}
+.density-priority{font-size:9px;color:#aec492;letter-spacing:.3px;background:#2a3323;border:1px solid #404c35;padding:2px 5px;border-radius:3px;white-space:nowrap}
+.density-group .count-mode{margin-bottom:11px}
+.density-group .density-status{margin-bottom:14px}
+.density-group .density-status strong{font-size:21px;color:#e4dfef}
+.density-group .control-hint{margin-bottom:0}

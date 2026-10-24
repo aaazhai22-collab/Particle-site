@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { MAX_PARTICLES } from './particleLimits';
 
 export interface ParticleAsset {
   name: string;
@@ -14,7 +15,7 @@ export interface ParticleAsset {
   thumbnail?: string;
 }
 
-const POOL_SIZE = 100_000;
+const POOL_SIZE = MAX_PARTICLES;
 const RADIUS = 1.35;
 const IMAGE_SAMPLE_SIDE = 2048;
 const TEXTURE_SAMPLE_SIDE = 2048;
@@ -24,6 +25,25 @@ const MAX_MODEL_BYTES = 100 * 1024 * 1024;
 const MAX_DECODE_PIXELS = 36_000_000;
 const IMAGE_HEADER_BYTES = 1024 * 1024;
 const FALLBACK_COLOR = new THREE.Color('#b6a4ff');
+
+function runSynchronously<T>(steps: Generator<void, T>): T {
+  let result = steps.next();
+  while (!result.done) result = steps.next();
+  return result.value;
+}
+
+async function runCooperatively<T>(steps: Generator<void, T>): Promise<T> {
+  let result = steps.next();
+  const scheduler = (globalThis as typeof globalThis & { scheduler?: { yield?: () => Promise<void> } }).scheduler;
+  while (!result.done) {
+    // Return to the browser between bounded chunks, keeping file replacement,
+    // loading feedback and camera interaction responsive during a 500k import.
+    if (scheduler?.yield) await scheduler.yield();
+    else await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    result = steps.next();
+  }
+  return result.value;
+}
 
 export function radicalInverse(index: number, base: number): number {
   let value = 0;
@@ -44,18 +64,29 @@ export function createParticleSeeds(count: number): Float32Array {
 
 /** Normalize in place, keeping all proportions and preserving a stable sampling prefix. */
 export function normalizeParticlePositions<T extends Float32Array | Float64Array>(positions: T, radius = RADIUS): T {
+  return runSynchronously(normalizationSteps(positions, radius));
+}
+
+function* normalizationSteps<T extends Float32Array | Float64Array>(positions: T, radius = RADIUS): Generator<void, T> {
   if (!positions.length || positions.length % 3) throw new Error('素材没有有效的粒子位置。');
   const min = [Infinity, Infinity, Infinity]; const max = [-Infinity, -Infinity, -Infinity];
   for (let i = 0; i < positions.length; i++) {
+    if (i > 0 && i % 65_536 === 0) yield;
     if (!Number.isFinite(positions[i])) throw new Error('素材包含无效的顶点坐标。');
     const axis = i % 3; min[axis] = Math.min(min[axis], positions[i]); max[axis] = Math.max(max[axis], positions[i]);
   }
   const center = min.map((value, axis) => (value + max[axis]) / 2);
   let extent = 0;
-  for (let i = 0; i < positions.length; i += 3) extent = Math.max(extent, Math.hypot(positions[i] - center[0], positions[i + 1] - center[1], positions[i + 2] - center[2]));
+  for (let i = 0; i < positions.length; i += 3) {
+    if (i > 0 && i % 98_304 === 0) yield;
+    extent = Math.max(extent, Math.hypot(positions[i] - center[0], positions[i + 1] - center[1], positions[i + 2] - center[2]));
+  }
   // A one-pixel image is still useful: it becomes a single point at the origin.
   const scale = extent > 1e-12 ? radius / extent : 1;
-  for (let i = 0; i < positions.length; i++) positions[i] = (positions[i] - center[i % 3]) * scale;
+  for (let i = 0; i < positions.length; i++) {
+    if (i > 0 && i % 65_536 === 0) yield;
+    positions[i] = (positions[i] - center[i % 3]) * scale;
+  }
   return positions;
 }
 
@@ -85,10 +116,19 @@ export function createSphereAsset(): ParticleAsset {
 
 /** Pure image sampling used by both the browser importer and regression tests. */
 export function sampleImagePixels(width: number, height: number, pixels: Uint8ClampedArray, name: string): ParticleAsset {
+  return runSynchronously(imageSamplingSteps(width, height, pixels, name));
+}
+
+export function sampleImagePixelsAsync(width: number, height: number, pixels: Uint8ClampedArray, name: string): Promise<ParticleAsset> {
+  return runCooperatively(imageSamplingSteps(width, height, pixels, name));
+}
+
+function* imageSamplingSteps(width: number, height: number, pixels: Uint8ClampedArray, name: string): Generator<void, ParticleAsset> {
   if (!Number.isInteger(width) || !Number.isInteger(height) || width <= 0 || height <= 0 || pixels.length !== width * height * 4) throw new Error('图片没有有效的采样区域。');
   let validCount = 0; let partialAlpha = false;
   let minX = Infinity; let maxX = -Infinity; let minY = Infinity; let maxY = -Infinity;
   for (let pixel = 0; pixel < width * height; pixel++) {
+    if (pixel > 0 && pixel % 65_536 === 0) yield;
     const alpha = pixels[pixel * 4 + 3]; if (!alpha) continue;
     validCount++; if (alpha < 255) partialAlpha = true;
     const x = pixel % width; const y = Math.floor(pixel / width);
@@ -98,9 +138,12 @@ export function sampleImagePixels(width: number, height: number, pixels: Uint8Cl
   const valid = new Uint32Array(validCount);
   const centerX = (minX + maxX) / 2; const centerY = (minY + maxY) / 2;
   let radiusSquared = 0;
-  for (let pixel = 0, n = 0; pixel < width * height; pixel++) if (pixels[pixel * 4 + 3] > 0) {
-    valid[n++] = pixel; const x = pixel % width - centerX; const y = Math.floor(pixel / width) - centerY;
-    radiusSquared = Math.max(radiusSquared, x * x + y * y);
+  for (let pixel = 0, n = 0; pixel < width * height; pixel++) {
+    if (pixel > 0 && pixel % 65_536 === 0) yield;
+    if (pixels[pixel * 4 + 3] > 0) {
+      valid[n++] = pixel; const x = pixel % width - centerX; const y = Math.floor(pixel / width) - centerY;
+      radiusSquared = Math.max(radiusSquared, x * x + y * y);
+    }
   }
   const scale = radiusSquared > 0 ? RADIUS / Math.sqrt(radiusSquared) : 1;
   const count = Math.min(POOL_SIZE, validCount);
@@ -110,11 +153,13 @@ export function sampleImagePixels(width: number, height: number, pixels: Uint8Cl
   // This permutation keeps prefixes stable and unique without a spatial lattice.
   let sampleSeed = 0x537a2d91;
   for (let i = validCount - 1; i > 0; i--) {
+    if (i % 65_536 === 0) yield;
     sampleSeed ^= sampleSeed << 13; sampleSeed ^= sampleSeed >>> 17; sampleSeed ^= sampleSeed << 5;
     const j = (sampleSeed >>> 0) % (i + 1);
     const pixel = valid[i]; valid[i] = valid[j]; valid[j] = pixel;
   }
   for (let n = 0; n < count; n++) {
+    if (n > 0 && n % 16_384 === 0) yield;
     const pixel = valid[n]; const p = pixel * 4;
     positions.set([((pixel % width) - centerX) * scale, (centerY - Math.floor(pixel / width)) * scale, 0], n * 3);
     colors.set([linearChannel(pixels[p] / 255), linearChannel(pixels[p + 1] / 255), linearChannel(pixels[p + 2] / 255)], n * 3);
@@ -174,7 +219,7 @@ async function loadImage(file: File): Promise<ParticleAsset> {
     const context = canvas.getContext('2d', { willReadFrequently: true });
     if (!context) throw new Error('浏览器无法读取图片像素，请刷新页面后重试。');
     context.drawImage(source, 0, 0, canvas.width, canvas.height);
-    const result = sampleImagePixels(canvas.width, canvas.height, context.getImageData(0, 0, canvas.width, canvas.height).data, file.name);
+    const result = await sampleImagePixelsAsync(canvas.width, canvas.height, context.getImageData(0, 0, canvas.width, canvas.height).data, file.name);
     if (ratio < 1) result.notes.push(`为控制内存，图片按原比例缩小至 ${canvas.width} × ${canvas.height} 后采样；原文件未修改。`);
     const thumbnail = document.createElement('canvas'); canvases.push(thumbnail); const thumbRatio = Math.min(1, 240 / Math.max(canvas.width, canvas.height));
     thumbnail.width = Math.max(1, Math.round(canvas.width * thumbRatio)); thumbnail.height = Math.max(1, Math.round(canvas.height * thumbRatio));
@@ -209,19 +254,29 @@ function textureRaster(texture: THREE.Texture): Raster | null {
 
 /** Sample a fully loaded static scene; does not take ownership of the caller's scene. */
 export function sampleModelScene(scene: THREE.Object3D, name: string, initialNotes: string[] = []): ParticleAsset {
+  return runSynchronously(modelSamplingSteps(scene, name, initialNotes));
+}
+
+export function sampleModelSceneAsync(scene: THREE.Object3D, name: string, initialNotes: string[] = []): Promise<ParticleAsset> {
+  return runCooperatively(modelSamplingSteps(scene, name, initialNotes));
+}
+
+function* modelSamplingSteps(scene: THREE.Object3D, name: string, initialNotes: string[]): Generator<void, ParticleAsset> {
   scene.updateMatrixWorld(true);
   const notes = [...initialNotes]; const triangles: Triangle[] = []; const a = new THREE.Vector3(); const b = new THREE.Vector3(); const c = new THREE.Vector3(); const edge = new THREE.Vector3(); const cross = new THREE.Vector3();
   let skippedMeshes = 0; let invalidTriangles = 0;
-  scene.traverse(object => {
-    if (!(object instanceof THREE.Mesh)) { if (object instanceof THREE.Points || object instanceof THREE.Line) skippedMeshes++; return; }
+  const objects: THREE.Object3D[] = []; scene.traverse(object => objects.push(object));
+  for (const object of objects) {
+    if (!(object instanceof THREE.Mesh)) { if (object instanceof THREE.Points || object instanceof THREE.Line) skippedMeshes++; continue; }
     const mesh = object as THREE.Mesh;
-    if ((mesh as THREE.SkinnedMesh).isSkinnedMesh || (mesh as THREE.InstancedMesh).isInstancedMesh || mesh.geometry.morphAttributes.position?.length) { skippedMeshes++; return; }
+    if ((mesh as THREE.SkinnedMesh).isSkinnedMesh || (mesh as THREE.InstancedMesh).isInstancedMesh || mesh.geometry.morphAttributes.position?.length) { skippedMeshes++; continue; }
     const geometry = mesh.geometry; const position = geometry.getAttribute('position'); const index = geometry.index;
-    if (!position || position.itemSize < 3) { skippedMeshes++; return; }
+    if (!position || position.itemSize < 3) { skippedMeshes++; continue; }
     const length = index ? index.count : position.count;
-    if (length % 3) { skippedMeshes++; return; }
+    if (length % 3) { skippedMeshes++; continue; }
     const start = Math.max(0, Math.ceil(geometry.drawRange.start / 3) * 3); const end = Math.min(length, Number.isFinite(geometry.drawRange.count) ? geometry.drawRange.start + geometry.drawRange.count : length);
     for (let offset = start; offset + 2 < end; offset += 3) {
+      if (offset > start && (offset - start) % 24_576 === 0) yield;
       const ia = index ? index.getX(offset) : offset; const ib = index ? index.getX(offset + 1) : offset + 1; const ic = index ? index.getX(offset + 2) : offset + 2;
       if (![ia, ib, ic].every(vertex => Number.isInteger(vertex) && vertex >= 0 && vertex < position.count)) { invalidTriangles++; continue; }
       a.fromBufferAttribute(position, ia).applyMatrix4(mesh.matrixWorld); b.fromBufferAttribute(position, ib).applyMatrix4(mesh.matrixWorld); c.fromBufferAttribute(position, ic).applyMatrix4(mesh.matrixWorld);
@@ -233,7 +288,7 @@ export function sampleModelScene(scene: THREE.Object3D, name: string, initialNot
       triangles.push({ geometry, material, matrix: mesh.matrixWorld, a: ia, b: ib, c: ic, area });
       if (triangles.length > MAX_TRIANGLES) throw new Error('模型超过 1,000,000 个有效三角面，请先简化模型再导入。');
     }
-  });
+  }
   if (!triangles.length) throw new Error('模型没有有效的静态三角网格。当前版本不支持骨骼、形变、实例化、点或线模型。');
   if (skippedMeshes) notes.push(`已跳过 ${skippedMeshes} 个不支持的骨骼 / 形变 / 实例化 / 非三角对象，仅采样有效静态网格。`);
   if (invalidTriangles) notes.push(`已跳过 ${invalidTriangles.toLocaleString()} 个退化或无效三角面。`);
@@ -244,6 +299,7 @@ export function sampleModelScene(scene: THREE.Object3D, name: string, initialNot
   let hasOriginalColors = false;
   const warn = (key: string, text: string) => { if (!warned.has(key)) { warned.add(key); notes.push(text); } };
   for (let i = 0; i < POOL_SIZE; i++) {
+    if (i > 0 && i % 8_192 === 0) yield;
     const triangle = triangles[selectCumulativeIndex(cumulative, radicalInverse(i + 1, 2) * total)];
     const weights = sampleTriangleWeights(i); const attribute = triangle.geometry.getAttribute('position'); const vertexIds = [triangle.a, triangle.b, triangle.c];
     a.fromBufferAttribute(attribute, triangle.a).applyMatrix4(triangle.matrix); b.fromBufferAttribute(attribute, triangle.b).applyMatrix4(triangle.matrix); c.fromBufferAttribute(attribute, triangle.c).applyMatrix4(triangle.matrix);
@@ -280,7 +336,7 @@ export function sampleModelScene(scene: THREE.Object3D, name: string, initialNot
     }
     colors.set([Number.isFinite(r) ? Math.max(0, r) : FALLBACK_COLOR.r, Number.isFinite(g) ? Math.max(0, g) : FALLBACK_COLOR.g, Number.isFinite(blue) ? Math.max(0, blue) : FALLBACK_COLOR.b], i * 3);
   }
-  normalizeParticlePositions(positions);
+  yield* normalizationSteps(positions);
   return { name, kind: 'model', positions: new Float32Array(positions), colors, seeds: createParticleSeeds(POOL_SIZE), count: POOL_SIZE, hasOriginalColors, notes };
 }
 
@@ -316,7 +372,7 @@ async function loadModel(file: File): Promise<ParticleAsset> {
   let scenes: THREE.Group[] = [];
   try {
     const gltf = await new GLTFLoader(manager).parseAsync(bytes, ''); scenes = gltf.scenes;
-    return sampleModelScene(gltf.scene, file.name, notes);
+    return await sampleModelSceneAsync(gltf.scene, file.name, notes);
   } catch (error) {
     if (error instanceof Error && /静态|超过|外部|基础|坐标/.test(error.message)) throw error;
     const detail = error instanceof Error && /Draco|Meshopt|KTX|decoder|extension/i.test(error.message) ? '当前版本不支持此模型使用的压缩或扩展，请导出普通静态 GLB。' : '模型读取失败或文件损坏，请重新选择包含静态三角网格的 GLB。';

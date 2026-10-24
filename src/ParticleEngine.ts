@@ -7,6 +7,9 @@ import type { ParticleAsset } from './assets';
 import { DEFAULT_CLIP, normalizeClip, sampleClip } from './animation';
 import type { AnimationClip, AnimationSample } from './animation';
 import { particleVertexShader, particleFragmentShader } from './shaders';
+import { ParticlePostProcessing } from './ParticlePostProcessing';
+import { AdaptiveQualityController } from './adaptiveQuality';
+import { MAX_PARTICLES, DEFAULT_PARTICLE_COUNT } from './particleLimits';
 
 export type Effect = 'radial' | 'noise' | 'vortex' | 'directional' | 'wave' | 'erosion';
 export type { PlaybackMode } from './playback';
@@ -14,6 +17,7 @@ export type FlowDirection = 'x' | '-x' | 'y' | '-y' | 'z' | '-z';
 
 export interface ParticleParams {
   count: number;
+  autoCount: boolean;
   size: number;
   color: string;
   colorMode: 'original' | 'uniform';
@@ -27,6 +31,10 @@ export interface ParticleParams {
   duration: number;
   playbackRate: number;
   glow: number;
+  exposure: number;
+  contrast: number;
+  curl: number;
+  sparkle: number;
   fade: boolean;
   autoRotate: boolean;
   rotationSpeed: number;
@@ -40,11 +48,12 @@ export interface ParticleParams {
 }
 
 export const DEFAULT_PARAMS: ParticleParams = {
-  count: 30_000, size: 2, color: '#b6a4ff', colorMode: 'uniform', opacity: 0.9,
+  count: 300_000, autoCount: true, size: 2, color: '#b6a4ff', colorMode: 'uniform', opacity: 0.9,
   spread: 2, turbulence: 0.15, motionSpeed: 1, duration: 3, playbackRate: 1,
   depth: 1.2, scatter: 0.65, stagger: 0.35,
   glow: 0.65, fade: false, autoRotate: false, rotationSpeed: 0.5, axis: 'y',
   erosion: 0.65, flowScale: 1.4, stringiness: 1, trail: 0.25, direction: 'x', waveRhythm: 1,
+  exposure: 1.3, contrast: 1, curl: 1.2, sparkle: 0.35,
 };
 
 export interface EngineState extends PlaybackState {
@@ -54,9 +63,11 @@ export interface EngineState extends PlaybackState {
   timelineDuration: number;
   timelineLoop: boolean;
   playbackSource: 'timeline' | 'free';
+  adaptiveStatus: string;
+  adaptiveCeiling: number;
+  frameMsAvg: number;
 }
 
-const MAX_PARTICLES = 100_000;
 const MAX_TRAILS = 16_000;
 const SPHERE_RADIUS = 1.35;
 const OUTPUT_WIDTH = 1280;
@@ -83,6 +94,7 @@ export class ParticleEngine {
   private readonly trails: THREE.LineSegments;
   private readonly material: THREE.ShaderMaterial;
   private readonly trailMaterial: THREE.ShaderMaterial;
+  private readonly postProcessing: ParticlePostProcessing;
   private readonly resizeObserver: ResizeObserver;
   private readonly values: ParticleParams = { ...DEFAULT_PARAMS };
   private asset: ParticleAsset;
@@ -92,7 +104,8 @@ export class ParticleEngine {
   private trailProgressVelocity = 0;
   private readonly current: EngineState = {
     progress: 0, running: true, mode: 'loop', direction: 1, time: 0, fps: 0,
-    actualCount: DEFAULT_PARAMS.count, timelineTime: 0, timelineDuration: 6, timelineLoop: true, playbackSource: 'timeline',
+    actualCount: DEFAULT_PARTICLE_COUNT, timelineTime: 0, timelineDuration: 6, timelineLoop: true, playbackSource: 'timeline',
+    adaptiveStatus: '等待有效运动采样', adaptiveCeiling: DEFAULT_PARAMS.count, frameMsAvg: 0,
   };
   private readonly onUpdate: (state: EngineState) => void;
   private readonly onError?: (message: string) => void;
@@ -105,7 +118,16 @@ export class ParticleEngine {
   private pendingEffect: Effect | null = null;
   private destroyed = false;
   private needsRendering = true;
+  private cameraDirty = false;
   private captureActive = false;
+  private recordingLocked = false;
+  private adaptive: AdaptiveQualityController | null = null;
+  private activeCount = DEFAULT_PARTICLE_COUNT;
+  private adaptiveWarmupPending = true;
+  private adaptiveWarmupReason = '图形首次编译预热，暂不判断设备性能';
+  private renderedTrails = false;
+  private renderedBloom = false;
+  private pageHidden = typeof document !== 'undefined' && document.hidden;
 
   public constructor(
     private readonly container: HTMLElement,
@@ -152,6 +174,7 @@ export class ParticleEngine {
     this.controls.mouseButtons.RIGHT = THREE.MOUSE.PAN;
     this.controls.addEventListener('start', this.interactionStart);
     this.controls.addEventListener('end', this.interactionEnd);
+    this.controls.addEventListener('change', this.controlsChange);
     this.resetView();
 
     this.asset = createSphereAsset();
@@ -163,6 +186,8 @@ export class ParticleEngine {
       uDepth: { value: this.values.depth }, uScatter: { value: this.values.scatter },
       uStagger: { value: this.values.stagger }, uIsImage: { value: 0 },
       uGlow: { value: this.values.glow }, uMode: { value: 0 }, uAxis: { value: 1 },
+      uCurl: { value: this.values.curl }, uSparkle: { value: this.values.sparkle },
+      uDensityOpacity: { value: 1 },
       uColor: { value: new THREE.Color(this.values.color) }, uOriginalColor: { value: 0 },
       uOpacity: { value: this.values.opacity }, uFade: { value: 0 },
       uErosion: { value: this.values.erosion }, uFlowScale: { value: this.values.flowScale },
@@ -172,11 +197,11 @@ export class ParticleEngine {
     };
     this.material = new THREE.ShaderMaterial({
       uniforms, vertexShader: particleVertexShader, fragmentShader: particleFragmentShader,
-      transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
+      transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, toneMapped: false,
     });
     this.trailMaterial = new THREE.ShaderMaterial({
       uniforms, defines: { TRAIL: 1 }, vertexShader: particleVertexShader, fragmentShader: particleFragmentShader,
-      transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
+      transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, toneMapped: false,
     });
     this.points = new THREE.Points(this.geometry, this.material);
     this.trails = new THREE.LineSegments(this.trailGeometry, this.trailMaterial);
@@ -185,6 +210,10 @@ export class ParticleEngine {
     this.trails.renderOrder = -1;
     this.object.add(this.trails, this.points);
     this.scene.add(this.object);
+    this.postProcessing = new ParticlePostProcessing(this.renderer, this.scene, this.camera);
+    this.postProcessing.configure(this.values.glow, this.values.exposure, this.values.contrast);
+    this.synchronizeAdaptive(true);
+    this.requestAdaptiveWarmup('图形首次编译预热，暂不判断设备性能');
     this.updateCount();
     this.rebuildProgressLookup();
     this.applyTimelineSample();
@@ -227,6 +256,7 @@ export class ParticleEngine {
     this.trailGeometry = trailGeometry;
     this.points.geometry = geometry;
     this.trails.geometry = trailGeometry;
+    this.synchronizeAdaptive(true);
     this.updateCount();
     this.syncUniforms();
     oldGeometry.dispose();
@@ -235,12 +265,14 @@ export class ParticleEngine {
   }
 
   public setParams(partial: Partial<ParticleParams>): void {
+    const previous = { ...this.values };
     const ranges: Partial<Record<keyof ParticleParams, [number, number]>> = {
       count: [1000, MAX_PARTICLES], size: [0.5, 8], opacity: [0, 1], spread: [0, 5],
       turbulence: [0, 1], motionSpeed: [0, 3], duration: [0.5, 20], playbackRate: [0.25, 4],
       glow: [0, 2], rotationSpeed: [0, 3], erosion: [0, 1], flowScale: [0.3, 5],
       stringiness: [0, 3], trail: [0, 1], waveRhythm: [0.3, 3],
       depth: [0, 3], scatter: [0, 1], stagger: [0, 1],
+      exposure: [0.3, 3], contrast: [0.5, 2], curl: [0, 3], sparkle: [0, 1],
     };
     for (const [key, range] of Object.entries(ranges)) {
       const value = partial[key as keyof ParticleParams];
@@ -253,9 +285,23 @@ export class ParticleEngine {
     if (partial.colorMode === 'original' || partial.colorMode === 'uniform') this.values.colorMode = partial.colorMode;
     if (typeof partial.fade === 'boolean') this.values.fade = partial.fade;
     if (typeof partial.autoRotate === 'boolean') this.values.autoRotate = partial.autoRotate;
+    const wasAuto = this.values.autoCount;
+    if (typeof partial.autoCount === 'boolean') this.values.autoCount = partial.autoCount;
     if (partial.axis === 'x' || partial.axis === 'y' || partial.axis === 'z') this.values.axis = partial.axis;
     if (partial.direction && Object.prototype.hasOwnProperty.call(DIRECTION_VECTOR, partial.direction)) this.values.direction = partial.direction;
-    this.updateCount();
+    const changed = Object.keys(this.values).some(key => this.values[key as keyof ParticleParams] !== previous[key as keyof ParticleParams]);
+    if (!changed) return;
+    const quantityChanged = previous.count !== this.values.count || wasAuto !== this.values.autoCount;
+    if (quantityChanged) {
+      this.synchronizeAdaptive(!wasAuto && this.values.autoCount);
+      this.updateCount();
+    }
+    // Repeated settings sync, colour, exposure and playback controls do not
+    // invalidate a valid performance window. Resample actual fill/blur changes.
+    const fillChanged = previous.size !== this.values.size || previous.trail !== this.values.trail ||
+      previous.stringiness !== this.values.stringiness || previous.sparkle !== this.values.sparkle ||
+      (previous.glow > 0) !== (this.values.glow > 0);
+    if (fillChanged) this.adaptiveController().resetSamples();
     this.syncUniforms();
     this.emit();
   }
@@ -341,8 +387,17 @@ export class ParticleEngine {
   public setCaptureActive(active: boolean): void {
     if (this.captureActive === active) return;
     this.captureActive = active;
+    this.synchronizeRecordingFreeze();
     this.needsRendering = true;
     this.syncVisibility();
+  }
+
+  /** Paused recording still owns a fixed particle density until generation ends. */
+  public setRecordingLocked(locked: boolean): void {
+    if (this.recordingLocked === locked) return;
+    this.recordingLocked = locked;
+    this.synchronizeRecordingFreeze();
+    this.emit();
   }
 
   public setEffect(effect: Effect): void {
@@ -407,6 +462,7 @@ export class ParticleEngine {
     this.resizeObserver.disconnect();
     this.controls.removeEventListener('start', this.interactionStart);
     this.controls.removeEventListener('end', this.interactionEnd);
+    this.controls.removeEventListener('change', this.controlsChange);
     this.controls.dispose();
     this.canvas.removeEventListener('contextmenu', this.preventContextMenu);
     this.canvas.removeEventListener('webglcontextlost', this.contextLost);
@@ -415,6 +471,7 @@ export class ParticleEngine {
     this.trailGeometry.dispose();
     this.material.dispose();
     this.trailMaterial.dispose();
+    this.postProcessing.dispose();
     this.renderer.dispose();
     this.renderer.forceContextLoss();
     this.canvas.remove();
@@ -437,20 +494,52 @@ export class ParticleEngine {
       path[segment * 6 + 3] = (segment + 1) / 3;
     }
     geometry.setAttribute('position', new THREE.BufferAttribute(path, 3));
-    geometry.setAttribute('aOrigin', new THREE.InstancedBufferAttribute(asset.positions, 3));
-    geometry.setAttribute('aSeed', new THREE.InstancedBufferAttribute(asset.seeds, 3));
-    geometry.setAttribute('aColor', new THREE.InstancedBufferAttribute(asset.colors, 3));
+    // Upload only the short-trajectory prefix, not another full 500k pool.
+    const trailComponents = Math.min(asset.count, MAX_TRAILS) * 3;
+    geometry.setAttribute('aOrigin', new THREE.InstancedBufferAttribute(asset.positions.subarray(0, trailComponents), 3));
+    geometry.setAttribute('aSeed', new THREE.InstancedBufferAttribute(asset.seeds.subarray(0, trailComponents), 3));
+    geometry.setAttribute('aColor', new THREE.InstancedBufferAttribute(asset.colors.subarray(0, trailComponents), 3));
     geometry.instanceCount = Math.min(this.values.count, asset.count, this.trailBudget());
     return geometry;
   }
 
   private updateCount(): void {
-    this.current.actualCount = Math.min(this.values.count, this.asset.count);
+    if (!this.values.autoCount) this.activeCount = this.values.count;
+    this.current.actualCount = Math.min(this.activeCount, this.asset.count);
     this.geometry.setDrawRange(0, this.current.actualCount);
     this.trailGeometry.instanceCount = Math.min(this.current.actualCount, this.trailBudget());
   }
 
-  private trailBudget(): number { return this.values.count >= 60_000 ? 12_000 : MAX_TRAILS; }
+  private trailBudget(): number { return this.current.actualCount >= 60_000 ? 12_000 : MAX_TRAILS; }
+
+  private adaptiveController(): AdaptiveQualityController {
+    return this.adaptive ??= new AdaptiveQualityController();
+  }
+
+  private synchronizeAdaptive(reset = false): void {
+    const controller = this.adaptiveController();
+    if (reset) controller.reset(this.asset.count, this.values.count, Math.min(this.activeCount, DEFAULT_PARTICLE_COUNT));
+    else controller.setCeiling(this.values.count);
+    this.current.adaptiveCeiling = Math.min(this.values.count, this.asset.count);
+    if (!this.values.autoCount || (!this.recordingLocked && !this.captureActive)) {
+      this.activeCount = this.values.autoCount ? controller.state.currentCount : this.values.count;
+    }
+    this.current.adaptiveStatus = this.values.autoCount && (this.recordingLocked || this.captureActive) ? '录制期间冻结自动数量' :
+      this.values.autoCount ? controller.state.reason : '手动数量';
+  }
+
+  private synchronizeRecordingFreeze(): void {
+    const controller = this.adaptiveController();
+    if (this.recordingLocked || this.captureActive) {
+      controller.freeze('录制期间冻结粒子数量');
+      this.current.adaptiveStatus = this.values.autoCount ? '录制期间冻结自动数量' : '手动数量，录制期间可实时调整';
+    } else {
+      controller.resume();
+      controller.resetSamples();
+      this.synchronizeAdaptive();
+      this.updateCount();
+    }
+  }
 
   private syncUniforms(): void {
     const u = this.material.uniforms;
@@ -462,6 +551,9 @@ export class ParticleEngine {
     u.uStagger.value = this.values.stagger;
     u.uIsImage.value = this.asset.kind === 'image' ? 1 : 0;
     u.uGlow.value = this.values.glow;
+    u.uCurl.value = this.values.curl;
+    u.uSparkle.value = this.values.sparkle;
+    this.postProcessing.configure(this.values.glow, this.values.exposure, this.values.contrast);
     u.uColor.value.set(this.values.color);
     u.uOriginalColor.value = this.values.colorMode === 'original' && this.asset.hasOriginalColors ? 1 : 0;
     u.uOpacity.value = this.values.opacity;
@@ -526,11 +618,20 @@ export class ParticleEngine {
     this.pendingEffect = null;
     this.effect = effect;
     this.material.uniforms.uMode.value = EFFECT_INDEX[effect];
+    this.adaptiveController().resetSamples();
   }
 
   private emit(invalidate = true): void {
     if (invalidate) this.needsRendering = true;
     if (!this.destroyed) this.onUpdate(this.state);
+  }
+
+  private requestAdaptiveWarmup(reason: string): void {
+    this.adaptiveWarmupPending = true;
+    this.adaptiveWarmupReason = reason;
+    this.adaptiveController().resetSamples();
+    this.current.frameMsAvg = 0;
+    if (this.values.autoCount && !this.recordingLocked && !this.captureActive) this.current.adaptiveStatus = reason;
   }
 
   private scheduleFrame(): void {
@@ -542,6 +643,8 @@ export class ParticleEngine {
   private readonly visibilityChange = (): void => { this.syncVisibility(); };
 
   private syncVisibility(): void {
+    if (this.pageHidden && !document.hidden) this.requestAdaptiveWarmup('页面恢复预热，暂不判断设备性能');
+    this.pageHidden = document.hidden;
     this.lastFrame = 0;
     this.fpsStart = 0;
     this.fpsFrames = 0;
@@ -563,6 +666,15 @@ export class ParticleEngine {
   };
   private readonly interactionStart = (): void => { this.interacting = true; };
   private readonly interactionEnd = (): void => { this.interacting = false; };
+  private readonly controlsChange = this.handleControlsChange.bind(this);
+  private handleControlsChange(): void {
+    if (this.destroyed) return;
+    // Wheel and pointer handlers can update OrbitControls before the next RAF.
+    // Its subsequent update() may return false, so retain the change until tick.
+    this.cameraDirty = true;
+    this.needsRendering = true;
+    this.scheduleFrame();
+  }
   private readonly resize = (): void => {
     if (this.destroyed) return;
     const width = Math.max(1, Math.min(this.container.clientWidth, this.container.clientHeight * 16 / 9));
@@ -575,13 +687,19 @@ export class ParticleEngine {
     const u = this.material.uniforms;
     u.uProgress.value = this.current.progress;
     u.uTime.value = this.current.time;
-    const span = this.values.trail * (0.3 + this.values.stringiness * 0.4);
+    const span = this.values.trail * (0.18 + this.values.stringiness * 0.22) * (1 + this.values.curl * 0.2);
     u.uTrailTimeSpan.value = span * this.values.motionSpeed;
     u.uTrailProgressSpan.value = this.trailProgressVelocity * span;
     this.trails.visible = this.values.trail > 0 && this.current.progress > 0.00001;
     this.points.visible = !(this.values.fade && this.current.progress >= 1);
     this.trails.visible &&= this.points.visible && (u.uTrailTimeSpan.value > 0 || Math.abs(u.uTrailProgressSpan.value) > 0);
-    this.renderer.render(this.scene, this.camera);
+    if ((this.trails.visible && !this.renderedTrails) || (this.values.glow > 0 && !this.renderedBloom)) {
+      this.requestAdaptiveWarmup('图形新通道预热，暂不判断设备性能');
+    }
+    u.uDensityOpacity.value = clamp(Math.pow(DEFAULT_PARTICLE_COUNT / Math.max(1, this.current.actualCount), 0.35), 0.22, 1.35);
+    this.postProcessing.render();
+    this.renderedTrails ||= this.trails.visible;
+    this.renderedBloom ||= this.values.glow > 0;
     this.needsRendering = false;
   }
 
@@ -595,6 +713,11 @@ export class ParticleEngine {
   private tick(now: number): void {
     if (this.destroyed) return;
     const dt = this.lastFrame ? Math.max(0, (now - this.lastFrame) / 1000) : 0;
+    const previousShape = this.current.progress;
+    const previousScale = this.object.scale.x;
+    const previousRotationX = this.object.rotation.x;
+    const previousRotationY = this.object.rotation.y;
+    const previousRotationZ = this.object.rotation.z;
     this.lastFrame = now;
     if (this.current.running) {
       this.needsRendering = true;
@@ -625,9 +748,42 @@ export class ParticleEngine {
     }
     this.controls.autoRotate = this.values.autoRotate && !this.interacting;
     this.controls.autoRotateSpeed = this.values.rotationSpeed;
-    const cameraChanged = this.controls.update(dt);
+    const controlsChanged = this.controls.update(dt);
+    const cameraChanged = this.cameraDirty || !!controlsChanged;
+    this.cameraDirty = false;
+    const motionChanged = this.current.progress !== previousShape || this.object.scale.x !== previousScale ||
+      this.object.rotation.x !== previousRotationX || this.object.rotation.y !== previousRotationY ||
+      this.object.rotation.z !== previousRotationZ ||
+      (this.current.running && this.current.progress > 0 && this.values.motionSpeed > 0);
+    const visible = typeof document === 'undefined' || !document.hidden;
+    const particlesVisible = !(this.values.fade && this.current.progress >= 1);
+    const warmingUp = this.adaptiveWarmupPending || this.adaptiveController().isWarmingUp(now, dt * 1000);
+    const activeSample = visible && particlesVisible && (motionChanged || !!cameraChanged) && dt > 0 && !this.captureActive && !this.recordingLocked && !warmingUp;
+    if (activeSample) this.current.frameMsAvg = this.current.frameMsAvg ? this.current.frameMsAvg * 0.9 + dt * 1000 * 0.1 : dt * 1000;
+    if (this.values.autoCount) {
+      const adaptiveState = this.adaptiveController().observe({
+        now, frameMs: dt * 1000, eligible: activeSample,
+        reason: this.recordingLocked || this.captureActive ? '录制期间冻结自动数量' : !visible ? '后台暂停采样' :
+          !particlesVisible ? '已完全淡出，保留当前粒子数量' : warmingUp ? this.adaptiveWarmupReason : '等待真实运动或相机变化',
+      });
+      this.current.adaptiveStatus = this.recordingLocked || this.captureActive ? '录制期间冻结自动数量' : adaptiveState.reason;
+      this.current.adaptiveCeiling = adaptiveState.ceiling;
+      if (!this.recordingLocked && !this.captureActive && adaptiveState.currentCount !== this.activeCount) {
+        this.activeCount = adaptiveState.currentCount;
+        this.updateCount();
+        this.needsRendering = true;
+      }
+    }
     if (this.needsRendering || this.current.running || this.captureActive || cameraChanged) {
+      const renderStarted = performance.now();
       this.render();
+      if (this.adaptiveWarmupPending) {
+        const completedAt = now + Math.max(0, performance.now() - renderStarted);
+        this.adaptiveController().warmup(completedAt, 2000, this.adaptiveWarmupReason);
+        this.adaptiveWarmupPending = false;
+        this.current.frameMsAvg = 0;
+        if (this.values.autoCount && !this.recordingLocked && !this.captureActive) this.current.adaptiveStatus = this.adaptiveWarmupReason;
+      }
       this.fpsFrames++;
     }
     if (!this.fpsStart) this.fpsStart = now;

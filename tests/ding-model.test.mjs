@@ -6,6 +6,9 @@ import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import ts from 'typescript';
 
+const limitsSource = await readFile(new URL('../src/particleLimits.ts', import.meta.url), 'utf8');
+const limitsURL = `data:text/javascript;base64,${Buffer.from(ts.transpileModule(limitsSource, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext } }).outputText).toString('base64')}`;
+const { MAX_PARTICLES } = await import(limitsURL);
 const bytes = await readFile(new URL('../public/examples/ding-model.glb', import.meta.url));
 const metadata = JSON.parse(await readFile(new URL('../public/examples/ding-model-metadata.json', import.meta.url), 'utf8'));
 const jsonLength = bytes.readUInt32LE(12);
@@ -16,6 +19,7 @@ async function importSource(path) {
   const source = await readFile(new URL(path, import.meta.url), 'utf8');
   let { outputText } = ts.transpileModule(source, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext } });
   outputText = outputText.replace(/from (['"])(three(?:\/[^'"]*)?)\1/g, (_, quote, name) => `from ${JSON.stringify(import.meta.resolve(name))}`);
+  outputText = outputText.replace(/from (['"])\.\/particleLimits\1/g, () => `from ${JSON.stringify(limitsURL)}`);
   return import(`data:text/javascript;base64,${Buffer.from(outputText).toString('base64')}`);
 }
 
@@ -156,10 +160,10 @@ test('GLTFLoader 读取实际几何保持源模型比例及 Y 向上的立体深
   } finally { assets.disposeAssetScenes(loaded.scenes); }
 });
 
-test('真实鼎表面采样产生 100k 有限粒子，居中、完整覆盖前后与四足', async () => {
+test('真实鼎表面采样产生 500k 有限粒子，居中、完整覆盖前后与四足', async () => {
   const asset = await actualGeometryAsset();
-  assert.equal(asset.kind, 'model'); assert.equal(asset.count, 100000);
-  assert.equal(asset.positions.length, 300000); assert.equal(asset.colors.length, 300000); assert.equal(asset.seeds.length, 300000);
+  assert.equal(asset.kind, 'model'); assert.equal(asset.count, MAX_PARTICLES);
+  assert.equal(asset.positions.length, MAX_PARTICLES * 3); assert.equal(asset.colors.length, MAX_PARTICLES * 3); assert.equal(asset.seeds.length, MAX_PARTICLES * 3);
   assert.deepEqual(asset.notes, [], '无退化面、无效坐标或不支持对象的回退警告');
   const min = [Infinity, Infinity, Infinity], max = [-Infinity, -Infinity, -Infinity]; let radius = 0;
   for (let index = 0; index < asset.count; index++) {

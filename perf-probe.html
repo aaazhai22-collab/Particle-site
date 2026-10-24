@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="zh-CN">
+<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>粒子渲染性能诊断</title>
+<style>*{box-sizing:border-box}body{margin:0;background:#111118;color:#dedeea;font:13px/1.65 'Microsoft YaHei',sans-serif}main{max-width:1180px;margin:auto;padding:20px}h1{font-size:22px;margin:0}p{color:#aaaabc}button,a{font:inherit}button{border:0;border-radius:6px;background:#d5f7a1;color:#26331c;padding:9px 14px;cursor:pointer}button:disabled{opacity:.4;cursor:wait}#status{color:#d5f7a1;margin:10px 0;min-height:24px}#stage{height:300px;background:#000;border:1px solid #363645;display:flex;align-items:center;justify-content:center;overflow:hidden;border-radius:6px}#stage canvas{max-height:100%;max-width:100%}pre{padding:14px;background:#1b1b25;white-space:pre-wrap;font:11px/1.6 monospace;max-height:650px;overflow:auto}a{color:#d5f7a1;display:inline-block;margin:10px 0}.note{font-size:11px;color:#84849b}</style></head>
+<body><main><h1>30,000 球体粒子 · RAF / HDR / Bloom 诊断</h1>
+<p>约 14–18 秒：先测无绘制 RAF，再比较原始直绘、后处理关闭 Bloom、开启 Bloom，各测聚合和 60% 消散。一个引擎；不读像素、不录像、不写 QA 接口。请保持此页可见。</p>
+<button id="run">运行性能矩阵</button><div id="status" role="status">尚未运行。</div><div id="stage"></div><a id="download" hidden>下载诊断 JSON</a><pre id="report">等待实际测试。</pre>
+<p class="note">JS 提交耗时是 renderer / composer 调用在主线程返回的时间，包含可能的驱动阻塞，但不是 GPU timer query 的纯执行时间。独立 RAF 与 250 ms 心跳一起记录；后台 RAF 限频与真实渲染瓶颈需结合两者判断。测试结束释放引擎与 GPU 资源，不自动下载或覆盖其他报告。</p>
+</main><script type="module">
+import { ParticleEngine } from '/src/ParticleEngine.ts';
+const $=selector=>document.querySelector(selector),ui={run:$('#run'),status:$('#status'),stage:$('#stage'),report:$('#report'),download:$('#download')};
+const wait=ms=>new Promise(resolve=>setTimeout(resolve,ms));
+let engine=null,originalPostRender=null,busy=false,active=null,report=null,raf=0,heartbeat=null,lastRaf=null,lastBeat=null,downloadURL=null;
+const stages=[
+ {id:'raf-only',path:'none',progress:0,glow:0,label:'RAF 基线，不绘制'},
+ {id:'direct-p0',path:'direct',progress:0,glow:0,label:'直绘 · 聚合'},
+ {id:'post-off-p0',path:'post',progress:0,glow:0,label:'HDR 后处理，无 Bloom · 聚合'},
+ {id:'post-on-p0',path:'post',progress:0,glow:.65,label:'HDR + Bloom · 聚合'},
+ {id:'direct-p60',path:'direct',progress:.6,glow:0,label:'直绘 · 60% 消散'},
+ {id:'post-off-p60',path:'post',progress:.6,glow:0,label:'HDR 后处理，无 Bloom · 60% 消散'},
+ {id:'post-on-p60',path:'post',progress:.6,glow:.65,label:'HDR + Bloom · 60% 消散'},
+];
+const mean=list=>list.length?list.reduce((sum,value)=>sum+value,0)/list.length:null;
+function summarize(list){const sorted=[...list].sort((a,b)=>a-b);return {samples:list.length,meanMs:mean(list),minMs:list.length?sorted[0]:null,maxMs:list.length?sorted.at(-1):null,p95Ms:list.length?sorted[Math.floor((sorted.length-1)*.95)]:null};}
+function visible(){return {hidden:document.hidden,visibilityState:document.visibilityState,hasFocus:document.hasFocus()};}
+function environment(){const gl=engine.canvas.getContext('webgl2'),extension=gl?.getExtension('WEBGL_debug_renderer_info');return {browser:navigator.userAgent,platform:navigator.platform,cpuThreads:navigator.hardwareConcurrency,deviceMemoryGB:navigator.deviceMemory??null,deviceMemoryNote:'浏览器估计，非已确认物理内存',devicePixelRatio,viewport:[innerWidth,innerHeight],output:[engine.canvas.width,engine.canvas.height],visibility:visible(),gpu:gl?{renderer:gl.getParameter(extension?extension.UNMASKED_RENDERER_WEBGL:gl.RENDERER),vendor:gl.getParameter(extension?extension.UNMASKED_VENDOR_WEBGL:gl.VENDOR),version:gl.getParameter(gl.VERSION)}:null};}
+function loop(now){if(!busy)return;if(active){if(lastRaf!==null)active.rafIntervals.push(now-lastRaf);active.rafCallbacks++;active.hiddenDuringStage ||= document.hidden;}lastRaf=now;raf=requestAnimationFrame(loop);}
+function cleanup(){cancelAnimationFrame(raf);raf=0;if(heartbeat)clearInterval(heartbeat);heartbeat=null;if(engine){engine.setCaptureActive(false);engine.setRecordingLocked(false);engine.setRunning(false);if(originalPostRender)engine.postProcessing.render=originalPostRender;engine.destroy();}engine=null;originalPostRender=null;active=null;}
+window.addEventListener('beforeunload',()=>{cleanup();if(downloadURL)URL.revokeObjectURL(downloadURL);});
+document.addEventListener('visibilitychange',()=>{if(busy&&report)report.visibilityEvents.push({at:new Date().toISOString(),stage:active?.spec.id,...visible()});});
+function publish(){ui.report.textContent=JSON.stringify(report,null,2);}
+ui.run.addEventListener('click',async()=>{
+ if(busy||!import.meta.env.DEV)return;busy=true;ui.run.disabled=true;cleanup();ui.download.hidden=true;if(downloadURL)URL.revokeObjectURL(downloadURL);downloadURL=null;lastRaf=lastBeat=null;
+ report={test:'particle-raf-hdr-performance-probe',startedAt:new Date().toISOString(),timeZone:Intl.DateTimeFormat().resolvedOptions().timeZone,requestedParticles:30000,stageSeconds:2,particleShaderGlowFixed:.65,results:[],errors:[],visibilityEvents:[],notes:['每档实际固定30,000粒子；autoCount关闭，trail关闭；粒子shader的uGlow固定.65，避免点尺寸改变干扰后处理比较。','通过setCaptureActive(true)强制每帧进入渲染，未创建录像或媒体轨道。','仅此诊断页临时包装postProcessing.render；原始直绘绕过HDR/后处理；无生产源码变动。','JS提交计时不是GPU timer query；诊断页不readPixels、不captureStream。','各档包含首次调用，首次编译或驱动初始化可能影响最大值，请结合均值与RAF基线。']};
+ const runStarted=performance.now();
+ try{
+  ui.status.textContent='创建单引擎和手动 30,000 球体…';
+  engine=new ParticleEngine(ui.stage,()=>{},error=>report.errors.push({stage:active?.spec.id,error}));engine.setRunning(false);engine.setParams({autoCount:false,count:30000,size:2,glow:0,trail:0,fade:false,autoRotate:false,motionSpeed:0,colorMode:'uniform',exposure:1.3,contrast:1,curl:1.2,sparkle:.35});engine.setProgress(0);engine.setEffect('erosion');
+  report.environment=environment();report.params=engine.params;report.actualCount=engine.state.actualCount;report.capacity=engine.geometry.getAttribute('position').count;
+  originalPostRender=engine.postProcessing.render;
+  const boundPost=originalPostRender.bind(engine.postProcessing);
+  engine.postProcessing.render=()=>{
+   if(!active)return;
+   const started=performance.now();
+   try{if(active.spec.path==='direct'){engine.renderer.setRenderTarget(null);engine.renderer.render(engine.scene,engine.camera);}else if(active.spec.path==='post')boundPost();}
+   catch(error){report.errors.push({stage:active.spec.id,error:error instanceof Error?error.message:String(error)});}
+   finally{active.submissions.push(performance.now()-started);}
+  };
+  engine.setCaptureActive(true);raf=requestAnimationFrame(loop);
+  heartbeat=setInterval(()=>{const now=performance.now();if(active&&lastBeat!==null)active.timerIntervals.push(now-lastBeat);lastBeat=now;},250);
+  for(const spec of stages){
+   if(performance.now()-runStarted>18500){report.stoppedAtBudget=true;break;}
+   engine.setParams({glow:spec.glow});engine.material.uniforms.uGlow.value=.65;engine.setProgress(spec.progress);engine.setRunning(false);lastRaf=lastBeat=null;
+   active={spec,started:performance.now(),submissions:[],rafIntervals:[],timerIntervals:[],rafCallbacks:0,visibility:{...visible()},hiddenDuringStage:document.hidden};
+   ui.status.textContent=spec.label+' · 测量约 2 秒…';await wait(2000);
+   const finished=performance.now(),measured=active;active=null;
+   const submission=summarize(measured.submissions),rafStats=summarize(measured.rafIntervals),timerStats=summarize(measured.timerIntervals),wallSeconds=(finished-measured.started)/1000;
+   report.results.push({...spec,wallSeconds,actualCount:engine.state.actualCount,drawRangeCount:engine.geometry.drawRange.count,submission,raf:rafStats,rafCallbacks:measured.rafCallbacks,rafFPS:rafStats.meanMs?1000/rafStats.meanMs:null,renderCallsPerWallSecond:measured.submissions.length/wallSeconds,heartbeat250ms:timerStats,visibilityAtStart:measured.visibility,visibilityAtEnd:visible(),hiddenDuringStage:measured.hiddenDuringStage,rendered:spec.path!=='none'});publish();
+  }
+  report.completedAt=new Date().toISOString();report.totalWallSeconds=(performance.now()-runStarted)/1000;report.matrixComplete=report.results.length===stages.length;
+  const baseline=report.results.find(result=>result.id==='raf-only'),direct=report.results.filter(result=>result.path==='direct'),post=report.results.filter(result=>result.path==='post');
+  report.diagnosticHints={baselineRAF_FPS:baseline?.rafFPS??null,directRAF_FPS:direct.map(result=>({id:result.id,fps:result.rafFPS,submitMeanMs:result.submission.meanMs})),postRAF_FPS:post.map(result=>({id:result.id,fps:result.rafFPS,submitMeanMs:result.submission.meanMs})),interpretation:'若不绘制RAF基线也约1Hz，先查宿主浏览器/可见性/帧调度；若基线和直绘流畅而post显著变慢，定位HDR/后处理。若JS提交很低但RAF仍慢，不能单凭提交时间判GPU耗时。'};
+  ui.status.textContent=report.matrixComplete?'性能矩阵完成，已停止并释放引擎。':'达到诊断时间预算，已停止引擎；保留已完成的各档结果。';
+ }catch(error){report.error=error instanceof Error?error.message:String(error);report.failedAt=new Date().toISOString();ui.status.textContent='诊断失败：'+report.error;}
+ finally{busy=false;cleanup();publish();const blob=new Blob([JSON.stringify(report,null,2)],{type:'application/json'});downloadURL=URL.createObjectURL(blob);ui.download.href=downloadURL;ui.download.download='particle-perf-probe_'+new Date().toISOString().replace(/[:.]/g,'-')+'.json';ui.download.hidden=false;ui.run.disabled=false;ui.run.textContent='重新运行性能矩阵';}
+});
+if(!import.meta.env.DEV){ui.run.disabled=true;ui.status.textContent='仅供本地开发模式。';}
+</script></body></html>

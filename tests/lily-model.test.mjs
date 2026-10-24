@@ -5,6 +5,9 @@ import { inflateSync } from 'node:zlib';
 import { test } from 'node:test';
 import ts from 'typescript';
 
+const limitsSource = await readFile(new URL('../src/particleLimits.ts', import.meta.url), 'utf8');
+const limitsURL = `data:text/javascript;base64,${Buffer.from(ts.transpileModule(limitsSource, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext } }).outputText).toString('base64')}`;
+const { MAX_PARTICLES } = await import(limitsURL);
 // 检查真实 GLB 文件与真实采样函数。Node 中用 PNG 解码后的实际像素
 // 提供最小 bitmap / canvas 读取表面；这里不声称 WebGL 或浏览器录像通过。
 const bytes = await readFile(new URL('../public/examples/lily-model.glb', import.meta.url));
@@ -16,6 +19,7 @@ const bin = bytes.subarray(28 + jsonLength);
 const source = await readFile(new URL('../src/assets.ts', import.meta.url), 'utf8');
 let { outputText } = ts.transpileModule(source, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext } });
 outputText = outputText.replace(/from (['"])(three(?:\/[^'"]*)?)\1/g, (_, quote, name) => `from ${JSON.stringify(import.meta.resolve(name))}`);
+outputText = outputText.replace(/from (['"])\.\/particleLimits\1/g, () => `from ${JSON.stringify(limitsURL)}`);
 const assets = await import(`data:text/javascript;base64,${Buffer.from(outputText).toString('base64')}`);
 
 function accessor(index) {
@@ -171,10 +175,10 @@ test('照片来源保持原字节，真实 atlas PNG 解码为 1024 × 1536 彩�
   assert.ok(colored > image.width * image.height * .1, 'atlas 包含彩色花瓣，不能是空白贴图');
 });
 
-test('真实 loadParticleAsset 生成 100k 原色样本，居中并保持非平面 Z 厚度', async () => {
+test('真实 loadParticleAsset 生成 500k 原色样本，居中并保持非平面 Z 厚度', async () => {
   const asset = await actualAsset();
-  assert.equal(asset.kind, 'model'); assert.equal(asset.count, 100000); assert.equal(asset.hasOriginalColors, true);
-  assert.equal(asset.positions.length, 300000); assert.equal(asset.colors.length, 300000); assert.equal(asset.seeds.length, 300000);
+  assert.equal(asset.kind, 'model'); assert.equal(asset.count, MAX_PARTICLES); assert.equal(asset.hasOriginalColors, true);
+  assert.equal(asset.positions.length, MAX_PARTICLES * 3); assert.equal(asset.colors.length, MAX_PARTICLES * 3); assert.equal(asset.seeds.length, MAX_PARTICLES * 3);
   assert.ok(asset.notes.every(note => !/贴图.*失败|贴图无法读取/.test(note)), asset.notes.join('；'));
   const min = [Infinity, Infinity, Infinity], max = [-Infinity, -Infinity, -Infinity]; let radius = 0;
   for (let i = 0; i < asset.count; i++) {

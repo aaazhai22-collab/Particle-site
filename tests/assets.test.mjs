@@ -4,16 +4,20 @@ import { readFile } from 'node:fs/promises';
 import ts from 'typescript';
 import * as THREE from 'three';
 
+const limitsSource = await readFile(new URL('../src/particleLimits.ts', import.meta.url), 'utf8');
+const limitsURL = `data:text/javascript;base64,${Buffer.from(ts.transpileModule(limitsSource, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext } }).outputText).toString('base64')}`;
+const { MAX_PARTICLES } = await import(limitsURL);
 const source = await readFile(new URL('../src/assets.ts', import.meta.url), 'utf8');
 let { outputText } = ts.transpileModule(source, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext } });
 outputText = outputText.replace(/from (['"])(three(?:\/[^'"]*)?)\1/g, (_, quote, name) => `from ${JSON.stringify(import.meta.resolve(name))}`);
+outputText = outputText.replace(/from (['"])\.\/particleLimits\1/g, () => `from ${JSON.stringify(limitsURL)}`);
 const assets = await import(`data:text/javascript;base64,${Buffer.from(outputText).toString('base64')}`);
 const maximumRadius = positions => { let value = 0; for (let i = 0; i < positions.length; i += 3) value = Math.max(value, Math.hypot(positions[i], positions[i + 1], positions[i + 2])); return value; };
 const geometry = () => new THREE.BufferGeometry().setAttribute('position', new THREE.Float32BufferAttribute([0, 0, 0, 2, 0, 0, 0, 1, 0], 3));
 
 test('sphere and seed pools retain an identical prefix and exact source radius', () => {
   const first = assets.createSphereAsset(); const second = assets.createSphereAsset();
-  assert.equal(first.count, 100000); assert.equal(first.kind, 'sphere');
+  assert.equal(first.count, MAX_PARTICLES); assert.equal(first.kind, 'sphere');
   assert.deepEqual(first.positions, second.positions); assert.deepEqual(first.seeds, second.seeds);
   assert.deepEqual(assets.createParticleSeeds(100), assets.createParticleSeeds(200).slice(0, 300));
   assert.ok(Math.abs(maximumRadius(first.positions) - 1.35) < 2e-7);
@@ -39,13 +43,14 @@ test('transparent image pixels are omitted, faint alpha retained, and sRGB conve
   assert.throws(() => assets.sampleImagePixels(2, 2, new Uint8ClampedArray(16), 'clear.png'), /完全透明/);
 });
 
-test('seeded image shuffle generates unique sample prefixes at the 100k cap', () => {
+test('image capacity follows real valid pixels below the 500k pool ceiling', () => {
   const pixels = new Uint8ClampedArray(500 * 500 * 4).fill(255);
   const asset = assets.sampleImagePixels(500, 500, pixels, 'large.jpg');
-  assert.equal(asset.count, 100000);
+  assert.equal(asset.count, 250000);
   const points = new Set();
   for (let i = 0; i < asset.positions.length; i += 3) points.add(`${asset.positions[i]},${asset.positions[i + 1]}`);
-  assert.equal(points.size, 100000);
+  assert.equal(points.size, 250000);
+  assert.ok(asset.notes.some(note => note.includes('250,000')));
   assert.ok(maximumRadius(asset.positions) <= 1.3500001);
 });
 
@@ -69,14 +74,14 @@ test('736px portrait image prefixes cover rows/columns without periodic stripe b
       xResidues[x % 16]++; yResidues[y % 16]++;
     }
   }
-  assert.equal(first.count, 100000);
+  assert.equal(first.count, MAX_PARTICLES);
   assert.equal(unique.size, first.count, 'the capped pool must contain distinct valid pixels');
   assert.ok(columns.size / width > 0.95, `30k prefix covers ${columns.size}/${width} columns`);
   assert.ok(rows.size / height > 0.95, `30k prefix covers ${rows.size}/${height} rows`);
   assert.ok(cells.every(count => count >= 3 && count <= 34), `1k spatial cells: ${[...cells]}`);
   assert.ok(xResidues.every(count => count >= 30 && count <= 100), `1k x mod 16 bins: ${[...xResidues]}`);
   assert.ok(yResidues.every(count => count >= 30 && count <= 100), `1k y mod 16 bins: ${[...yResidues]}`);
-  for (const count of [1000, 30000, 100000]) {
+  for (const count of [1000, 30000, 100000, 200000, MAX_PARTICLES]) {
     assert.deepEqual(first.positions.subarray(0, count * 3), second.positions.subarray(0, count * 3));
     assert.deepEqual(first.seeds.subarray(0, count * 3), second.seeds.subarray(0, count * 3));
   }
@@ -136,7 +141,7 @@ test('unsupported or degenerate meshes cannot produce a fake usable model', () =
 test('real multi mesh GLB fixture parses and unsupported or corrupt files fail in Chinese', async () => {
   const bytes = await readFile(new URL('../public/examples/sample-sphere.glb', import.meta.url));
   const asset = await assets.loadParticleAsset(new File([bytes], 'sample-sphere.glb'));
-  assert.equal(asset.kind, 'model'); assert.equal(asset.count, 100000); assert.equal(asset.hasOriginalColors, true);
+  assert.equal(asset.kind, 'model'); assert.equal(asset.count, MAX_PARTICLES); assert.equal(asset.hasOriginalColors, true);
   assert.ok(maximumRadius(asset.positions) <= 1.3500001);
   await assert.rejects(assets.loadParticleAsset(new File(['broken'], 'broken.glb')), /损坏/);
   const empty = await readFile(new URL('../public/examples/no-static-mesh.glb', import.meta.url));
@@ -196,7 +201,7 @@ test('hierarchical rotated nonuniform world transforms retain area weighting and
 test('one invalid triangle is skipped while valid static geometry remains available', () => {
   const g = geometry().setIndex([0, 1, 2, 0, 1, 999]); const scene = new THREE.Group(); scene.add(new THREE.Mesh(g, new THREE.MeshBasicMaterial()));
   const asset = assets.sampleModelScene(scene, 'partly-invalid.glb');
-  assert.equal(asset.count, 100000); assert.ok(asset.notes.some(note => note.includes('1 个退化或无效')));
+  assert.equal(asset.count, MAX_PARTICLES); assert.ok(asset.notes.some(note => note.includes('1 个退化或无效')));
 });
 
 test('UV transform and flipY swap sampled regions; missing UV falls back and warns', () => {
@@ -222,4 +227,41 @@ test('all loaded scenes release shared geometry, materials, textures and bitmaps
   g.addEventListener('dispose', () => geometryDisposed++); material.addEventListener('dispose', () => materialDisposed++); texture.addEventListener('dispose', () => textureDisposed++);
   first.add(new THREE.Mesh(g, material)); second.add(new THREE.Mesh(g, material)); assets.disposeAssetScenes([first, second]);
   assert.deepEqual([geometryDisposed, materialDisposed, textureDisposed, bitmapClosed], [1, 1, 1, 1]);
+});
+
+test('cooperative image sampling yields to the event loop and matches synchronous colors, positions and seeds', async () => {
+  const width = 800, height = 700;
+  const pixels = new Uint8ClampedArray(width * height * 4);
+  for (let pixel = 0; pixel < width * height; pixel++) pixels.set([pixel % 255, (pixel >>> 8) % 255, 123, pixel % 7 === 0 ? 0 : 255], pixel * 4);
+  let yielded = false;
+  const pending = assets.sampleImagePixelsAsync(width, height, pixels, 'large-alpha.png');
+  const pulse = setTimeout(() => { yielded = true; }, 0);
+  const asyncAsset = await pending;
+  clearTimeout(pulse);
+  assert.equal(yielded, true, 'a 500k-cap import must allow other browser tasks to run');
+  const syncAsset = assets.sampleImagePixels(width, height, pixels, 'large-alpha.png');
+  const valid = width * height - Math.ceil(width * height / 7);
+  assert.equal(asyncAsset.count, valid);
+  assert.deepEqual(asyncAsset.positions, syncAsset.positions);
+  assert.deepEqual(asyncAsset.colors, syncAsset.colors);
+  assert.deepEqual(asyncAsset.seeds, syncAsset.seeds);
+});
+
+test('cooperative model pool stays at 500k and preserves exact synchronous original colors and stable prefixes', async () => {
+  const scene = new THREE.Group();
+  scene.add(new THREE.Mesh(geometry(), new THREE.MeshBasicMaterial({ color: '#31b5ea' })));
+  let yielded = false;
+  const pending = assets.sampleModelSceneAsync(scene, 'cooperative.glb');
+  const pulse = setTimeout(() => { yielded = true; }, 0);
+  const asyncAsset = await pending;
+  clearTimeout(pulse);
+  assert.equal(yielded, true);
+  const syncAsset = assets.sampleModelScene(scene, 'cooperative.glb');
+  assert.equal(asyncAsset.count, MAX_PARTICLES);
+  assert.equal(asyncAsset.positions.length + asyncAsset.colors.length + asyncAsset.seeds.length, MAX_PARTICLES * 9);
+  for (const count of [5000, 30000, 100000, 200000, MAX_PARTICLES]) {
+    assert.deepEqual(asyncAsset.positions.subarray(0, count * 3), syncAsset.positions.subarray(0, count * 3));
+    assert.deepEqual(asyncAsset.colors.subarray(0, count * 3), syncAsset.colors.subarray(0, count * 3));
+    assert.deepEqual(asyncAsset.seeds.subarray(0, count * 3), syncAsset.seeds.subarray(0, count * 3));
+  }
 });

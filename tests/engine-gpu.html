@@ -33,7 +33,7 @@ try {
   const feedback=gl.createTransformFeedback(),output=gl.createBuffer();
   gl.bindTransformFeedback(gl.TRANSFORM_FEEDBACK,feedback);gl.bindBuffer(gl.TRANSFORM_FEEDBACK_BUFFER,output);
   gl.bufferData(gl.TRANSFORM_FEEDBACK_BUFFER,source.byteLength,gl.DYNAMIC_READ);gl.bindBufferBase(gl.TRANSFORM_FEEDBACK_BUFFER,0,output);
-  const defaults={uDepth:1.2,uScatter:.65,uStagger:.35,uIsImage:1,uSpread:2,uTurbulence:.15,uFlowScale:1.4,uStringiness:1,uErosion:.65,uWaveRhythm:1,uAxis:1,uTime:2};
+  const defaults={uDepth:1.2,uScatter:.65,uStagger:.35,uIsImage:1,uSpread:2,uTurbulence:.15,uFlowScale:1.4,uStringiness:1,uErosion:.65,uWaveRhythm:1,uAxis:1,uTime:2,uCurl:1.2,uSparkle:.35,uDensityOpacity:1};
   gl.uniform3f(gl.getUniformLocation(program,'uDirection'),1,0,0);
   const identity=new Float32Array([1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1]);
   gl.uniformMatrix4fv(gl.getUniformLocation(program,'modelViewMatrix'),false,identity);
@@ -73,6 +73,7 @@ try {
   check('错峰释放保留局部原形并释放其他粒子',fixed>20&&moved>20);
   check('六种效果没有退化为同一位移',clouds.every((cloud,index)=>index===0||!exact(cloud,clouds[index-1])));
   check('随机散开控制影响实际逐点位置',!exact(sample(3,.7,{uScatter:0}),sample(3,.7,{uScatter:1})));
+  check('卷曲强度控制实际流线路径',!exact(sample(5,.7,{uCurl:0}),sample(5,.7,{uCurl:2.5})));
   report.status='passed';report.total=report.checks.length;
 }catch(error){report.status='failed';report.error=String(error.stack||error);}
 finally{gl?.getExtension('WEBGL_lose_context')?.loseContext();}
