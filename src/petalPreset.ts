@@ -19,7 +19,7 @@ export const DEFAULT_PETAL_TIMING: PetalTiming = {
 /** Stored with the preset, independently of its source image or model. */
 export const PETAL_PARAMS: Partial<ParticleParams> = {
   autoCount: true, count: 500_000, resolution: '1080p',
-  surfaceMode: true, petalFlow: true,
+  surfaceMode: true, petalFlow: true, grainStyle: false,
   ambient: 0.02, ambientRange: 0.3, ambientSpeed: 0.5,
   colorMode: 'original', size: 1.05, opacity: 0.94,
   glow: 0.3, exposure: 1.25, contrast: 1.1, sparkle: 0.06,

@@ -48,6 +48,7 @@ export interface ParticleParams {
   waveRhythm: number;
   surfaceMode: boolean;
   petalFlow: boolean;
+  grainStyle: boolean;
   ambient: number;
   ambientRange: number;
   ambientSpeed: number;
@@ -61,7 +62,7 @@ export const DEFAULT_PARAMS: ParticleParams = {
   glow: 0.65, fade: false, autoRotate: false, rotationSpeed: 0.5, axis: 'y',
   erosion: 0.65, flowScale: 1.4, stringiness: 1, trail: 0.25, direction: 'x', waveRhythm: 1,
   exposure: 1.3, contrast: 1, curl: 1.2, sparkle: 0.35,
-  surfaceMode: false, petalFlow: false, ambient: 0.02, ambientRange: 0.3, ambientSpeed: 0.5, resolution: '720p',
+  surfaceMode: false, petalFlow: false, grainStyle: false, ambient: 0.02, ambientRange: 0.3, ambientSpeed: 0.5, resolution: '720p',
 };
 
 export interface EngineState extends PlaybackState {
@@ -210,7 +211,7 @@ export class ParticleEngine {
       uStagger: { value: this.values.stagger }, uIsImage: { value: 0 },
       uGlow: { value: this.values.glow }, uMode: { value: 0 }, uAxis: { value: 1 },
       uCurl: { value: this.values.curl }, uSparkle: { value: this.values.sparkle },
-      uDensityOpacity: { value: 1 },
+      uDensityOpacity: { value: 1 }, uGrainStyle: { value: 0 },
       uColor: { value: new THREE.Color(this.values.color) }, uOriginalColor: { value: 0 },
       uOpacity: { value: this.values.opacity }, uFade: { value: 0 },
       uErosion: { value: this.values.erosion }, uFlowScale: { value: this.values.flowScale },
@@ -344,6 +345,7 @@ export class ParticleEngine {
     if (typeof partial.autoRotate === 'boolean') this.values.autoRotate = partial.autoRotate;
     if (typeof partial.surfaceMode === 'boolean') this.values.surfaceMode = partial.surfaceMode;
     if (typeof partial.petalFlow === 'boolean') this.values.petalFlow = partial.petalFlow;
+    if (typeof partial.grainStyle === 'boolean') this.values.grainStyle = partial.grainStyle;
     if ((partial.resolution === '720p' || partial.resolution === '1080p') && partial.resolution !== this.values.resolution) {
       if (this.recordingLocked || this.captureActive) this.onError?.('录制期间不能修改输出分辨率，请结束录制后再调整。');
       else this.values.resolution = partial.resolution;
@@ -372,7 +374,7 @@ export class ParticleEngine {
     // invalidate a valid performance window. Resample actual fill/blur changes.
     const fillChanged = previous.size !== this.values.size || previous.trail !== this.values.trail ||
       previous.stringiness !== this.values.stringiness || previous.sparkle !== this.values.sparkle ||
-      (previous.glow > 0) !== (this.values.glow > 0) || layersChanged;
+      (previous.glow > 0) !== (this.values.glow > 0) || previous.grainStyle !== this.values.grainStyle || layersChanged;
     if (fillChanged) this.adaptiveController().resetSamples();
     this.syncUniforms();
     if (this.timelineMode && (previous.motionSpeed !== this.values.motionSpeed || previous.ambientSpeed !== this.values.ambientSpeed)) {
@@ -725,6 +727,7 @@ export class ParticleEngine {
     u.uOriginalColor.value = this.values.colorMode === 'original' && this.asset.hasOriginalColors ? 1 : 0;
     u.uSurfaceMode.value = this.values.surfaceMode ? 1 : 0;
     u.uPetalFlow.value = this.isPetalFlowActive() ? 1 : 0;
+    u.uGrainStyle.value = this.values.grainStyle ? 1 : 0;
     u.uAmbientRange.value = this.values.ambientRange;
     u.uMotionSpeed.value = this.values.motionSpeed;
     const blending = this.values.surfaceMode ? THREE.NormalBlending : THREE.AdditiveBlending;

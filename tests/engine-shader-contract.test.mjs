@@ -9,6 +9,19 @@ const { outputText } = ts.transpileModule(source, {
 });
 const shaders = await import(`data:text/javascript;base64,${Buffer.from(outputText).toString('base64')}`);
 
+test('shader uniform references are declared and vertex/fragment varyings agree', () => {
+  const varyingTypes = [];
+  for (const [name, shader] of Object.entries(shaders)) {
+    const code = shader.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, '');
+    const uniforms = new Set([...code.matchAll(/\buniform\s+\w+\s+(u[A-Z]\w*)\b/g)].map(match => match[1]));
+    for (const [reference] of code.matchAll(/\bu[A-Z]\w*\b/g)) {
+      assert.ok(uniforms.has(reference), `${name} uses undeclared ${reference}`);
+    }
+    varyingTypes.push(Object.fromEntries([...code.matchAll(/\bvarying\s+(\w+)\s+(v\w+)\b/g)].map(match => [match[2], match[1]])));
+  }
+  assert.deepEqual(varyingTypes[0], varyingTypes[1]);
+});
+
 test('production GLSL does not declare reserved/future-reserved identifiers', () => {
   // `patch` compiles as ordinary TypeScript template text, but a real WebGL
   // compiler rejects it. Guard that cross-language regression before browser QA.

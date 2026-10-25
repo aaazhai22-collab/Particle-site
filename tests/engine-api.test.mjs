@@ -35,7 +35,7 @@ function editingEngine(options = {}) {
     'uAxis', 'uErosion', 'uFlowScale', 'uStringiness', 'uTrail', 'uWaveRhythm', 'uMode',
     'uDepth', 'uScatter', 'uStagger', 'uIsImage', 'uProgress', 'uTime', 'uTrailTimeSpan', 'uTrailProgressSpan',
     'uCurl', 'uSparkle', 'uDensityOpacity',
-    'uSurfaceMode', 'uPetalFlow', 'uAmbientPhase', 'uAmbientRange', 'uTimelineActive',
+    'uSurfaceMode', 'uPetalFlow', 'uGrainStyle', 'uAmbientPhase', 'uAmbientRange', 'uTimelineActive',
     'uTimelineTime', 'uTimelineDuration', 'uMotionSpeed', 'uProgressHistory',
     'uOutputScale',
   ].map((name) => [name, { value: 0 }]));
@@ -703,4 +703,65 @@ test('output resolution resizes the real canvas/HDR graph and is locked througho
   engine.setRecordingLocked(false);
   engine.setParams({ resolution: '720p' });
   assert.deepEqual(calls.slice(-2), [['canvas', 1280, 720, false], ['hdr', 1280, 720]]);
+});
+
+test('crystal grain style accepts booleans, reaches the renderer and preserves editing state', () => {
+  const engine = editingEngine();
+  assert.equal(DEFAULT_PARAMS.grainStyle, false, 'older settings retain their original appearance');
+  const source = engine.asset, geometry = engine.geometry, clip = engine.clip;
+  const camera = engine.camera.position.clone();
+  const editingState = () => Object.fromEntries([
+    'progress', 'running', 'mode', 'direction', 'time', 'timelineTime',
+    'timelineDuration', 'timelineLoop', 'actualCount',
+  ].map(key => [key, engine.state[key]]));
+  const before = editingState();
+  engine.setParams({ grainStyle: true });
+  assert.equal(engine.params.grainStyle, true);
+  assert.equal(engine.material.uniforms.uGrainStyle.value, 1);
+  for (const invalid of ['true', 1, null, undefined, {}, []]) {
+    engine.setParams({ grainStyle: invalid });
+    assert.equal(engine.params.grainStyle, true, 'invalid JSON types cannot toggle the style');
+    assert.equal(engine.material.uniforms.uGrainStyle.value, 1);
+  }
+  assert.equal(engine.asset, source);
+  assert.equal(engine.geometry, geometry);
+  assert.equal(engine.clip, clip);
+  assert.deepEqual(engine.camera.position, camera);
+  assert.deepEqual(editingState(), before);
+  engine.setParams({ grainStyle: DEFAULT_PARAMS.grainStyle });
+  assert.equal(engine.material.uniforms.uGrainStyle.value, 0);
+  assert.deepEqual(editingState(), before);
+});
+
+test('saved crystal parameters restore through the real API and old presets clear their style', async () => {
+  const presetBundle = await build({
+    stdin: { contents: `export { STARDUST_PARAMS } from './src/stardustPreset';
+      export { PETAL_PARAMS } from './src/petalPreset';
+      export { WHITE_LILY_PARAMS } from './src/whiteLilyPreset';`, resolveDir: process.cwd() },
+    bundle: true, write: false, platform: 'node', format: 'esm', target: 'es2022', logLevel: 'silent',
+  });
+  const { STARDUST_PARAMS, PETAL_PARAMS, WHITE_LILY_PARAMS } = await import(
+    `data:text/javascript;base64,${Buffer.from(presetBundle.outputFiles[0].text).toString('base64')}`
+  );
+  const engine = editingEngine({ capacity: 500000 });
+  engine.renderer.setSize = () => {};
+  engine.setParams(STARDUST_PARAMS);
+  const saved = JSON.parse(JSON.stringify(engine.params));
+  assert.equal(saved.grainStyle, true);
+  for (const oldPreset of [PETAL_PARAMS, WHITE_LILY_PARAMS]) {
+    engine.setParams(oldPreset);
+    assert.equal(engine.params.grainStyle, false);
+    assert.equal(engine.material.uniforms.uGrainStyle.value, 0);
+    engine.setParams(saved);
+    assert.equal(engine.params.grainStyle, true);
+    assert.equal(engine.material.uniforms.uGrainStyle.value, 1);
+    assert.equal(engine.params.colorMode, saved.colorMode);
+    assert.equal(engine.params.sparkle, saved.sparkle);
+  }
+  // The application restores absent fields from DEFAULT_PARAMS before setParams.
+  const oldJson = { ...saved };
+  delete oldJson.grainStyle;
+  engine.setParams({ ...DEFAULT_PARAMS, ...oldJson });
+  assert.equal(engine.params.grainStyle, false);
+  assert.equal(engine.material.uniforms.uGrainStyle.value, 0);
 });

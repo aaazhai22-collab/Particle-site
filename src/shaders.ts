@@ -34,6 +34,7 @@ export const particleVertexShader = /* glsl */ `
   uniform vec3 uColor;
   uniform float uSurfaceMode;
   uniform float uPetalFlow;
+  uniform float uGrainStyle;
   uniform float uAmbientPhase;
   uniform float uAmbientRange;
   uniform float uTimelineActive;
@@ -52,6 +53,7 @@ export const particleVertexShader = /* glsl */ `
   varying float vLocalAge;
   varying vec3 vSeed;
   varying float vHistory;
+  varying float vErosionField;
 
   vec3 flow(vec3 p, float t) {
     return vec3(
@@ -260,6 +262,14 @@ export const particleVertexShader = /* glsl */ `
     float tailBirth = 1.0;
     vec3 displaced;
     vLocalAge = 0.0;
+    vErosionField = 1.0;
+    if (uGrainStyle > 0.5 && petalActive) {
+      // Shared by neighbouring source samples, not independent random holes.
+      vec3 pores = original * uFlowScale;
+      float warmCenter = 1.0 - step(0.45, abs(aSurface.z - 1.0));
+      vErosionField = clamp(0.5 + 0.22 * sin(pores.x * 5.7 + sin(pores.y * 3.1)) +
+        0.2 * cos(pores.y * 4.3 - pores.z * 3.9) + warmCenter * 0.14, 0.08, 0.96);
+    }
     if (petalActive) {
       vLocalAge = petalAge(original, uProgress);
       float sampledAge = vLocalAge;
@@ -296,6 +306,7 @@ export const particleVertexShader = /* glsl */ `
     if (uSurfaceMode > 0.5) {
       vec3 viewNormal = normalize(normalMatrix * normal);
       float surfaceLight = 0.32 + 0.68 * pow(abs(dot(viewNormal, normalize(vec3(-0.35, 0.6, 1.0)))), 1.45);
+      if (uGrainStyle > 0.5) surfaceLight = mix(surfaceLight, 1.0, 0.35);
       vColor *= surfaceLight;
     }
     #ifdef TRAIL
@@ -303,6 +314,7 @@ export const particleVertexShader = /* glsl */ `
     #endif
     vShimmer = 0.82 + 0.18 * aSeed.z;
     vSpark = step(1.0 - uSparkle * 0.035, aSeed.z);
+    if (uGrainStyle > 0.5) vSpark = step(1.0 - uSparkle * 0.65, aSeed.z);
     vVisibility = visibility;
     vSeed = aSeed;
     vHistory = history;
@@ -331,6 +343,7 @@ export const particleVertexShader = /* glsl */ `
 
 export const particleFragmentShader = /* glsl */ `
   uniform float uOpacity;
+  uniform float uErosion;
   uniform float uGlow;
   uniform float uFade;
   uniform float uProgress;
@@ -338,6 +351,7 @@ export const particleFragmentShader = /* glsl */ `
   uniform float uPetalFlow;
   uniform float uMode;
   uniform float uOriginalColor;
+  uniform float uGrainStyle;
   varying vec3 vColor;
   varying float vShimmer;
   varying float vVisibility;
@@ -347,6 +361,7 @@ export const particleFragmentShader = /* glsl */ `
   varying float vLocalAge;
   varying vec3 vSeed;
   varying float vHistory;
+  varying float vErosionField;
 
   void main() {
     float petalWeight = uPetalFlow * step(4.5, uMode);
@@ -385,6 +400,15 @@ export const particleFragmentShader = /* glsl */ `
       if (uSurfaceMode > 0.5) {
         alpha = (1.0 - smoothstep(0.52, 0.99, radius)) * uOpacity * dissolve * vVisibility;
         #ifndef AMBIENT
+          if (uGrainStyle > 0.5) {
+            // Smaller luminous cores leave black space between coloured grains.
+            alpha = (1.0 - smoothstep(0.12, 0.92, radius)) * uOpacity * dissolve * vVisibility;
+            if (petalWeight > 0.5) {
+              float erosionPhase = smoothstep(0.14, 0.84, uProgress) * uErosion;
+              float detached = smoothstep(vErosionField - 0.045, vErosionField + 0.045, erosionPhase);
+              alpha *= 1.0 - detached;
+            }
+          }
           if (petalWeight > 0.5) {
             float endingProgress = mix(min(uProgress, 0.94), uProgress, uFade);
             float localProgress = endingProgress * mix(0.65, 1.0, vLocalAge);
@@ -409,6 +433,7 @@ export const particleFragmentShader = /* glsl */ `
     #else
       #ifndef AMBIENT
         if (uSurfaceMode > 0.5 && uOriginalColor > 0.5) energy = 1.22 + vSpark * 1.4;
+        if (uGrainStyle > 0.5) energy = 1.5 + vSpark * 1.9;
       #endif
     #endif
     #ifdef AMBIENT

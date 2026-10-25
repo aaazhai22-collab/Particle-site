@@ -250,3 +250,5 @@ select{color:#c1c1cc;background:#24242d;border:1px solid #40404c;border-radius:4
   .timeline-toolbar{margin-bottom:6px}
   .timeline-hint{margin-top:6px}
 }
+
+.stardust-demo{width:100%;margin-top:12px;text-align:left;border-color:#5b3b50;background:#2b1e2a;justify-content:flex-start}.stardust-demo>span{flex:1}.stardust-demo small{display:block;margin-top:5px;color:#bc94b1;font-size:9px;font-weight:400;line-height:1.5}.stardust-demo>svg:first-child{color:#f2b1d5}
