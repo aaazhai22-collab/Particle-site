@@ -10,6 +10,7 @@ import { particleVertexShader, particleFragmentShader } from './shaders';
 import { ParticlePostProcessing } from './ParticlePostProcessing';
 import { AdaptiveQualityController } from './adaptiveQuality';
 import { MAX_PARTICLES, DEFAULT_PARTICLE_COUNT } from './particleLimits';
+import { layerBudgets, ambientPhase, motionTime } from './particleLayers';
 
 export type Effect = 'radial' | 'noise' | 'vortex' | 'directional' | 'wave' | 'erosion';
 export type { PlaybackMode } from './playback';
@@ -45,6 +46,12 @@ export interface ParticleParams {
   trail: number;
   direction: FlowDirection;
   waveRhythm: number;
+  surfaceMode: boolean;
+  petalFlow: boolean;
+  ambient: number;
+  ambientRange: number;
+  ambientSpeed: number;
+  resolution: '720p' | '1080p';
 }
 
 export const DEFAULT_PARAMS: ParticleParams = {
@@ -54,6 +61,7 @@ export const DEFAULT_PARAMS: ParticleParams = {
   glow: 0.65, fade: false, autoRotate: false, rotationSpeed: 0.5, axis: 'y',
   erosion: 0.65, flowScale: 1.4, stringiness: 1, trail: 0.25, direction: 'x', waveRhythm: 1,
   exposure: 1.3, contrast: 1, curl: 1.2, sparkle: 0.35,
+  surfaceMode: false, petalFlow: false, ambient: 0.02, ambientRange: 0.3, ambientSpeed: 0.5, resolution: '720p',
 };
 
 export interface EngineState extends PlaybackState {
@@ -66,6 +74,8 @@ export interface EngineState extends PlaybackState {
   adaptiveStatus: string;
   adaptiveCeiling: number;
   frameMsAvg: number;
+  ambientCount: number;
+  filamentCount: number;
 }
 
 const MAX_TRAILS = 16_000;
@@ -90,10 +100,13 @@ export class ParticleEngine {
   private readonly object = new THREE.Group();
   private geometry: THREE.BufferGeometry;
   private trailGeometry: THREE.InstancedBufferGeometry;
+  private ambientGeometry: THREE.BufferGeometry;
   private readonly points: THREE.Points;
   private readonly trails: THREE.LineSegments;
+  private readonly ambientPoints: THREE.Points;
   private readonly material: THREE.ShaderMaterial;
   private readonly trailMaterial: THREE.ShaderMaterial;
+  private readonly ambientMaterial: THREE.ShaderMaterial;
   private readonly postProcessing: ParticlePostProcessing;
   private readonly resizeObserver: ResizeObserver;
   private readonly values: ParticleParams = { ...DEFAULT_PARAMS };
@@ -101,11 +114,14 @@ export class ParticleEngine {
   private clip = normalizeClip(DEFAULT_CLIP);
   private timelineMode = true;
   private readonly progressLookup = new Float32Array(1025);
+  private progressTexture?: THREE.DataTexture;
+  private ambientClock = 0;
   private trailProgressVelocity = 0;
   private readonly current: EngineState = {
     progress: 0, running: true, mode: 'loop', direction: 1, time: 0, fps: 0,
     actualCount: DEFAULT_PARTICLE_COUNT, timelineTime: 0, timelineDuration: 6, timelineLoop: true, playbackSource: 'timeline',
     adaptiveStatus: '等待有效运动采样', adaptiveCeiling: DEFAULT_PARAMS.count, frameMsAvg: 0,
+    ambientCount: 0, filamentCount: 0,
   };
   private readonly onUpdate: (state: EngineState) => void;
   private readonly onError?: (message: string) => void;
@@ -179,7 +195,9 @@ export class ParticleEngine {
 
     this.asset = createSphereAsset();
     this.geometry = this.createGeometry(this.asset);
-    this.trailGeometry = this.createTrailGeometry(this.asset);
+    this.trailGeometry = this.createTrailGeometry(this.asset, this.geometry);
+    this.ambientGeometry = this.createAmbientGeometry(this.asset, this.geometry);
+    this.rebuildProgressLookup();
     const uniforms = {
       uProgress: { value: 0 }, uTime: { value: 0 }, uSize: { value: this.values.size },
       uSpread: { value: this.values.spread }, uTurbulence: { value: this.values.turbulence },
@@ -194,6 +212,11 @@ export class ParticleEngine {
       uStringiness: { value: this.values.stringiness }, uTrail: { value: this.values.trail },
       uTrailTimeSpan: { value: 0 }, uTrailProgressSpan: { value: 0 },
       uDirection: { value: new THREE.Vector3(1, 0, 0) }, uWaveRhythm: { value: this.values.waveRhythm },
+      uSurfaceMode: { value: 0 }, uPetalFlow: { value: 0 },
+      uAmbientPhase: { value: 0 }, uAmbientRange: { value: this.values.ambientRange },
+      uTimelineActive: { value: 1 }, uTimelineTime: { value: 0 }, uTimelineDuration: { value: this.clip.duration },
+      uMotionSpeed: { value: this.values.motionSpeed }, uProgressHistory: { value: this.progressTexture },
+      uOutputScale: { value: 1 },
     };
     this.material = new THREE.ShaderMaterial({
       uniforms, vertexShader: particleVertexShader, fragmentShader: particleFragmentShader,
@@ -203,19 +226,26 @@ export class ParticleEngine {
       uniforms, defines: { TRAIL: 1 }, vertexShader: particleVertexShader, fragmentShader: particleFragmentShader,
       transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, toneMapped: false,
     });
+    this.ambientMaterial = new THREE.ShaderMaterial({
+      uniforms, defines: { AMBIENT: 1 }, vertexShader: particleVertexShader, fragmentShader: particleFragmentShader,
+      transparent: true, depthWrite: false, depthTest: true, blending: THREE.AdditiveBlending, toneMapped: false,
+    });
     this.points = new THREE.Points(this.geometry, this.material);
     this.trails = new THREE.LineSegments(this.trailGeometry, this.trailMaterial);
+    this.ambientPoints = new THREE.Points(this.ambientGeometry, this.ambientMaterial);
     this.points.frustumCulled = false;
     this.trails.frustumCulled = false;
-    this.trails.renderOrder = -1;
-    this.object.add(this.trails, this.points);
+    this.ambientPoints.frustumCulled = false;
+    this.points.renderOrder = 0;
+    this.trails.renderOrder = 1;
+    this.ambientPoints.renderOrder = 2;
+    this.object.add(this.points, this.trails, this.ambientPoints);
     this.scene.add(this.object);
     this.postProcessing = new ParticlePostProcessing(this.renderer, this.scene, this.camera);
-    this.postProcessing.configure(this.values.glow, this.values.exposure, this.values.contrast);
+    this.postProcessing.configure(this.values.glow, this.values.exposure, this.values.contrast, this.values.surfaceMode);
     this.synchronizeAdaptive(true);
     this.requestAdaptiveWarmup('图形首次编译预热，暂不判断设备性能');
     this.updateCount();
-    this.rebuildProgressLookup();
     this.applyTimelineSample();
     this.resizeObserver = new ResizeObserver(this.resize);
     this.resizeObserver.observe(container);
@@ -246,21 +276,29 @@ export class ParticleEngine {
       }
     }
     const geometry = this.createGeometry(asset);
-    let trailGeometry: THREE.InstancedBufferGeometry;
-    try { trailGeometry = this.createTrailGeometry(asset); }
-    catch (error) { geometry.dispose(); throw error; }
+    let trailGeometry: THREE.InstancedBufferGeometry | undefined;
+    let ambientGeometry: THREE.BufferGeometry;
+    try {
+      trailGeometry = this.createTrailGeometry(asset, geometry);
+      ambientGeometry = this.createAmbientGeometry(asset, geometry);
+    } catch (error) { geometry.dispose(); trailGeometry?.dispose(); throw error; }
     const oldGeometry = this.geometry;
     const oldTrailGeometry = this.trailGeometry;
+    const oldAmbientGeometry = this.ambientGeometry;
     this.asset = asset;
     this.geometry = geometry;
     this.trailGeometry = trailGeometry;
+    this.ambientGeometry = ambientGeometry;
     this.points.geometry = geometry;
     this.trails.geometry = trailGeometry;
+    this.ambientPoints.geometry = ambientGeometry;
+    this.updateTrailPath();
     this.synchronizeAdaptive(true);
     this.updateCount();
     this.syncUniforms();
     oldGeometry.dispose();
     oldTrailGeometry.dispose();
+    oldAmbientGeometry.dispose();
     this.emit();
   }
 
@@ -273,6 +311,7 @@ export class ParticleEngine {
       stringiness: [0, 3], trail: [0, 1], waveRhythm: [0.3, 3],
       depth: [0, 3], scatter: [0, 1], stagger: [0, 1],
       exposure: [0.3, 3], contrast: [0.5, 2], curl: [0, 3], sparkle: [0, 1],
+      ambient: [0, 0.08], ambientRange: [0, 1], ambientSpeed: [0, 3],
     };
     for (const [key, range] of Object.entries(ranges)) {
       const value = partial[key as keyof ParticleParams];
@@ -285,6 +324,12 @@ export class ParticleEngine {
     if (partial.colorMode === 'original' || partial.colorMode === 'uniform') this.values.colorMode = partial.colorMode;
     if (typeof partial.fade === 'boolean') this.values.fade = partial.fade;
     if (typeof partial.autoRotate === 'boolean') this.values.autoRotate = partial.autoRotate;
+    if (typeof partial.surfaceMode === 'boolean') this.values.surfaceMode = partial.surfaceMode;
+    if (typeof partial.petalFlow === 'boolean') this.values.petalFlow = partial.petalFlow;
+    if ((partial.resolution === '720p' || partial.resolution === '1080p') && partial.resolution !== this.values.resolution) {
+      if (this.recordingLocked || this.captureActive) this.onError?.('录制期间不能修改输出分辨率，请结束录制后再调整。');
+      else this.values.resolution = partial.resolution;
+    }
     const wasAuto = this.values.autoCount;
     if (typeof partial.autoCount === 'boolean') this.values.autoCount = partial.autoCount;
     if (partial.axis === 'x' || partial.axis === 'y' || partial.axis === 'z') this.values.axis = partial.axis;
@@ -292,17 +337,30 @@ export class ParticleEngine {
     const changed = Object.keys(this.values).some(key => this.values[key as keyof ParticleParams] !== previous[key as keyof ParticleParams]);
     if (!changed) return;
     const quantityChanged = previous.count !== this.values.count || wasAuto !== this.values.autoCount;
+    const layersChanged = previous.surfaceMode !== this.values.surfaceMode || previous.petalFlow !== this.values.petalFlow ||
+      previous.ambient !== this.values.ambient || previous.trail !== this.values.trail;
     if (quantityChanged) {
       this.synchronizeAdaptive(!wasAuto && this.values.autoCount);
-      this.updateCount();
+    }
+    if (quantityChanged || layersChanged) this.updateCount();
+    if (previous.petalFlow !== this.values.petalFlow) this.updateTrailPath();
+    if (previous.resolution !== this.values.resolution) {
+      const [width, height] = this.values.resolution === '1080p' ? [1920, 1080] : [1280, 720];
+      this.renderer.setSize(width, height, false);
+      this.postProcessing.setSize(width, height);
+      this.requestAdaptiveWarmup('输出分辨率变更预热，重新判断粒子数量');
     }
     // Repeated settings sync, colour, exposure and playback controls do not
     // invalidate a valid performance window. Resample actual fill/blur changes.
     const fillChanged = previous.size !== this.values.size || previous.trail !== this.values.trail ||
       previous.stringiness !== this.values.stringiness || previous.sparkle !== this.values.sparkle ||
-      (previous.glow > 0) !== (this.values.glow > 0);
+      (previous.glow > 0) !== (this.values.glow > 0) || layersChanged;
     if (fillChanged) this.adaptiveController().resetSamples();
     this.syncUniforms();
+    if (this.timelineMode && (previous.motionSpeed !== this.values.motionSpeed || previous.ambientSpeed !== this.values.ambientSpeed)) {
+      this.current.time = motionTime(this.current.timelineTime, this.values.motionSpeed);
+      this.ambientClock = this.current.timelineTime;
+    }
     this.emit();
   }
 
@@ -434,7 +492,26 @@ export class ParticleEngine {
     this.needsRendering = true;
   }
 
-  public fitView(): void {
+  public fitView(mode: 'full' | 'macro' = 'full'): void {
+    if (this.isPetalFlowActive() || (this.values.surfaceMode && this.current.progress === 0)) {
+      this.geometry.computeBoundingBox();
+      this.object.updateMatrixWorld(true);
+      const bounds = this.geometry.boundingBox?.clone().applyMatrix4(this.object.matrixWorld);
+      if (bounds && !bounds.isEmpty()) {
+        const center = bounds.getCenter(new THREE.Vector3());
+        const size = bounds.getSize(new THREE.Vector3());
+        const direction = this.camera.position.clone().sub(this.controls.target).normalize();
+        const allowance = 1 + this.current.progress * this.values.spread * 0.65;
+        const distance = Math.max(size.y, size.x / this.camera.aspect, size.z * 0.7, 0.25) * allowance /
+          (2 * Math.tan(THREE.MathUtils.degToRad(this.camera.fov / 2)) * 0.8) * (mode === 'macro' ? 0.58 : 1);
+        this.controls.target.copy(center);
+        this.camera.position.copy(center).add(direction.multiplyScalar(clamp(distance, this.controls.minDistance, this.controls.maxDistance)));
+        this.controls.update(0);
+        this.needsRendering = true;
+        this.scheduleFrame();
+        return;
+      }
+    }
     const amount = this.current.progress ** 2 * (3 - 2 * this.current.progress);
     const multiplier = this.effect === 'erosion' ? 2.5 + this.values.stringiness * 0.4 : 1.8;
     const radius = SPHERE_RADIUS * this.object.scale.x *
@@ -443,7 +520,7 @@ export class ParticleEngine {
     const distance = radius * depthScale / Math.sin(THREE.MathUtils.degToRad(this.camera.fov / 2)) * 1.08;
     const direction = this.camera.position.clone().sub(this.controls.target).normalize();
     this.controls.target.set(0, 0, 0);
-    this.camera.position.copy(direction.multiplyScalar(Math.min(distance, this.controls.maxDistance)));
+    this.camera.position.copy(direction.multiplyScalar(Math.min(distance * (mode === 'macro' ? 0.58 : 1), this.controls.maxDistance)));
     this.controls.update(0);
     this.needsRendering = true;
   }
@@ -469,8 +546,11 @@ export class ParticleEngine {
     document.removeEventListener('visibilitychange', this.visibilityChange);
     this.geometry.dispose();
     this.trailGeometry.dispose();
+    this.ambientGeometry.dispose();
     this.material.dispose();
     this.trailMaterial.dispose();
+    this.ambientMaterial.dispose();
+    this.progressTexture?.dispose();
     this.postProcessing.dispose();
     this.renderer.dispose();
     this.renderer.forceContextLoss();
@@ -482,11 +562,31 @@ export class ParticleEngine {
     geometry.setAttribute('position', new THREE.BufferAttribute(asset.positions, 3));
     geometry.setAttribute('aSeed', new THREE.BufferAttribute(asset.seeds, 3));
     geometry.setAttribute('aColor', new THREE.BufferAttribute(asset.colors, 3));
+    const extended = asset as ParticleAsset & { normals?: Float32Array; surface?: Float32Array };
+    const normals = new Float32Array(asset.count * 3);
+    const surface = new Float32Array(asset.count * 3);
+    for (let i = 0; i < asset.count; i++) {
+      const offset = i * 3;
+      const x = asset.positions[offset], y = asset.positions[offset + 1], z = asset.positions[offset + 2];
+      const n = extended.normals;
+      const suppliedNormal = n && [n[offset], n[offset + 1], n[offset + 2]].every(Number.isFinite);
+      const nx = suppliedNormal ? n[offset] : asset.kind === 'image' ? 0 : x;
+      const ny = suppliedNormal ? n[offset + 1] : asset.kind === 'image' ? 0 : y;
+      const nz = suppliedNormal ? n[offset + 2] : asset.kind === 'image' ? 1 : z;
+      const length = Math.hypot(nx, ny, nz);
+      normals.set(length > 1e-9 ? [nx / length, ny / length, nz / length] : [0, 0, 1], offset);
+      const s = extended.surface;
+      const suppliedSurface = s && [s[offset], s[offset + 1], s[offset + 2]].every(Number.isFinite);
+      surface.set(suppliedSurface ? [clamp(s[offset], 0, 1), clamp(s[offset + 1], 0, 1), clamp(s[offset + 2], 0, 2)] :
+        [Math.atan2(y, x) / (Math.PI * 2) + 0.5, clamp(Math.hypot(x, y, z) / SPHERE_RADIUS, 0, 1), 0], offset);
+    }
+    geometry.setAttribute('aNormal', new THREE.BufferAttribute(normals, 3));
+    geometry.setAttribute('aSurface', new THREE.BufferAttribute(surface, 3));
     geometry.setDrawRange(0, Math.min(this.values.count, asset.count));
     return geometry;
   }
 
-  private createTrailGeometry(asset: ParticleAsset): THREE.InstancedBufferGeometry {
+  private createTrailGeometry(asset: ParticleAsset, source: THREE.BufferGeometry): THREE.InstancedBufferGeometry {
     const geometry = new THREE.InstancedBufferGeometry();
     const path = new Float32Array(18);
     for (let segment = 0; segment < 3; segment++) {
@@ -499,16 +599,48 @@ export class ParticleEngine {
     geometry.setAttribute('aOrigin', new THREE.InstancedBufferAttribute(asset.positions.subarray(0, trailComponents), 3));
     geometry.setAttribute('aSeed', new THREE.InstancedBufferAttribute(asset.seeds.subarray(0, trailComponents), 3));
     geometry.setAttribute('aColor', new THREE.InstancedBufferAttribute(asset.colors.subarray(0, trailComponents), 3));
+    for (const name of ['aNormal', 'aSurface']) {
+      const data = source.getAttribute(name).array as Float32Array;
+      geometry.setAttribute(name, new THREE.InstancedBufferAttribute(data.subarray(0, trailComponents), 3));
+    }
     geometry.instanceCount = Math.min(this.values.count, asset.count, this.trailBudget());
     return geometry;
+  }
+
+  private createAmbientGeometry(asset: ParticleAsset, source: THREE.BufferGeometry): THREE.BufferGeometry {
+    const geometry = new THREE.BufferGeometry();
+    const components = Math.min(asset.count, MAX_TRAILS) * 3;
+    for (const name of ['position', 'aSeed', 'aColor', 'aNormal', 'aSurface']) {
+      const data = source.getAttribute(name).array as Float32Array;
+      geometry.setAttribute(name, new THREE.BufferAttribute(data.subarray(0, components), 3));
+    }
+    geometry.setDrawRange(0, 0);
+    return geometry;
+  }
+
+  private updateTrailPath(): void {
+    const segments = this.isPetalFlowActive() ? 24 : 3;
+    const path = new Float32Array(segments * 6);
+    for (let segment = 0; segment < segments; segment++) {
+      path[segment * 6] = segment / segments;
+      path[segment * 6 + 3] = (segment + 1) / segments;
+    }
+    this.trailGeometry.setAttribute('position', new THREE.BufferAttribute(path, 3));
   }
 
   private updateCount(): void {
     if (!this.values.autoCount) this.activeCount = this.values.count;
     this.current.actualCount = Math.min(this.activeCount, this.asset.count);
     this.geometry.setDrawRange(0, this.current.actualCount);
-    this.trailGeometry.instanceCount = Math.min(this.current.actualCount, this.trailBudget());
+    const petalActive = this.isPetalFlowActive();
+    const layers = layerBudgets(this.current.actualCount, this.values.petalFlow || this.values.surfaceMode, this.values.ambient, petalActive ? this.values.trail : 0);
+    this.current.ambientCount = layers.ambient;
+    this.current.filamentCount = petalActive ? layers.filaments : 0;
+    this.ambientGeometry.setDrawRange(0, layers.ambient);
+    this.trailGeometry.instanceCount = petalActive ? layers.filaments : Math.min(this.current.actualCount, this.trailBudget());
   }
+
+  private isPetalFlowActive(): boolean { return this.values.petalFlow && this.effect === 'erosion'; }
 
   private trailBudget(): number { return this.current.actualCount >= 60_000 ? 12_000 : MAX_TRAILS; }
 
@@ -553,9 +685,19 @@ export class ParticleEngine {
     u.uGlow.value = this.values.glow;
     u.uCurl.value = this.values.curl;
     u.uSparkle.value = this.values.sparkle;
-    this.postProcessing.configure(this.values.glow, this.values.exposure, this.values.contrast);
+    this.postProcessing.configure(this.values.glow, this.values.exposure, this.values.contrast, this.values.surfaceMode);
     u.uColor.value.set(this.values.color);
     u.uOriginalColor.value = this.values.colorMode === 'original' && this.asset.hasOriginalColors ? 1 : 0;
+    u.uSurfaceMode.value = this.values.surfaceMode ? 1 : 0;
+    u.uPetalFlow.value = this.isPetalFlowActive() ? 1 : 0;
+    u.uAmbientRange.value = this.values.ambientRange;
+    u.uMotionSpeed.value = this.values.motionSpeed;
+    const blending = this.values.surfaceMode ? THREE.NormalBlending : THREE.AdditiveBlending;
+    if (this.material.blending !== blending || this.material.depthWrite !== this.values.surfaceMode) {
+      this.material.blending = blending;
+      this.material.depthWrite = this.values.surfaceMode;
+      this.material.needsUpdate = true;
+    }
     u.uOpacity.value = this.values.opacity;
     u.uFade.value = this.values.fade ? 1 : 0;
     u.uAxis.value = { x: 0, y: 1, z: 2 }[this.values.axis];
@@ -571,6 +713,14 @@ export class ParticleEngine {
     for (let i = 0; i < this.progressLookup.length; i++) {
       this.progressLookup[i] = sampleClip(this.clip, i / (this.progressLookup.length - 1) * this.clip.duration).progress;
     }
+    if (!this.progressTexture) {
+      this.progressTexture = new THREE.DataTexture(this.progressLookup, this.progressLookup.length, 1, THREE.RedFormat, THREE.FloatType);
+      this.progressTexture.minFilter = THREE.NearestFilter;
+      this.progressTexture.magFilter = THREE.NearestFilter;
+      this.progressTexture.generateMipmaps = false;
+    }
+    this.progressTexture.needsUpdate = true;
+    if (this.material?.uniforms.uProgressHistory) this.material.uniforms.uProgressHistory.value = this.progressTexture;
   }
 
   private closestProgressTime(progress: number): number {
@@ -606,6 +756,8 @@ export class ParticleEngine {
   private applyTimelineSample(): void {
     const sample = sampleClip(this.clip, this.current.timelineTime);
     this.current.progress = sample.progress;
+    this.current.time = motionTime(this.current.timelineTime, this.values.motionSpeed);
+    this.ambientClock = this.current.timelineTime;
     this.object.scale.setScalar(sample.scale);
     this.object.rotation.set(...sample.rotation.map(THREE.MathUtils.degToRad) as [number, number, number]);
   }
@@ -618,6 +770,9 @@ export class ParticleEngine {
     this.pendingEffect = null;
     this.effect = effect;
     this.material.uniforms.uMode.value = EFFECT_INDEX[effect];
+    this.updateTrailPath();
+    this.updateCount();
+    this.syncUniforms();
     this.adaptiveController().resetSamples();
   }
 
@@ -687,12 +842,18 @@ export class ParticleEngine {
     const u = this.material.uniforms;
     u.uProgress.value = this.current.progress;
     u.uTime.value = this.current.time;
+    u.uAmbientPhase.value = ambientPhase(this.ambientClock, this.values.ambientSpeed, this.clip.duration, this.timelineMode);
+    u.uTimelineActive.value = this.timelineMode ? 1 : 0;
+    u.uTimelineTime.value = this.current.timelineTime;
+    u.uTimelineDuration.value = this.clip.duration;
+    u.uOutputScale.value = this.values.resolution === '1080p' ? 1.5 : 1;
     const span = this.values.trail * (0.18 + this.values.stringiness * 0.22) * (1 + this.values.curl * 0.2);
     u.uTrailTimeSpan.value = span * this.values.motionSpeed;
-    u.uTrailProgressSpan.value = this.trailProgressVelocity * span;
-    this.trails.visible = this.values.trail > 0 && this.current.progress > 0.00001;
+    u.uTrailProgressSpan.value = this.values.trail * 0.22;
+    this.trails.visible = this.values.trail > 0 && this.current.progress > 0.00001 && this.trailGeometry.instanceCount > 0;
     this.points.visible = !(this.values.fade && this.current.progress >= 1);
-    this.trails.visible &&= this.points.visible && (u.uTrailTimeSpan.value > 0 || Math.abs(u.uTrailProgressSpan.value) > 0);
+    this.trails.visible &&= this.points.visible;
+    this.ambientPoints.visible = this.current.ambientCount > 0 && this.points.visible;
     if ((this.trails.visible && !this.renderedTrails) || (this.values.glow > 0 && !this.renderedBloom)) {
       this.requestAdaptiveWarmup('图形新通道预热，暂不判断设备性能');
     }
@@ -723,12 +884,12 @@ export class ParticleEngine {
       this.needsRendering = true;
       const previousProgress = this.current.progress;
       if (this.timelineMode) {
-        this.current.time += dt * this.values.motionSpeed;
         const next = advanceTimelineTime(this.current.timelineTime, dt, this.clip.duration, this.values.playbackRate, this.current.timelineLoop);
         this.current.timelineTime = next.time;
         this.applyTimelineSample();
         if (next.completed) this.current.running = false;
       } else {
+        this.ambientClock += dt;
         Object.assign(this.current, advancePlayback(this.current, dt, this.values));
         if (!this.current.running) {
           this.synchronizeLegacyEndpoint();
@@ -754,7 +915,8 @@ export class ParticleEngine {
     const motionChanged = this.current.progress !== previousShape || this.object.scale.x !== previousScale ||
       this.object.rotation.x !== previousRotationX || this.object.rotation.y !== previousRotationY ||
       this.object.rotation.z !== previousRotationZ ||
-      (this.current.running && this.current.progress > 0 && this.values.motionSpeed > 0);
+      (this.current.running && ((this.current.progress > 0 && this.values.motionSpeed > 0) ||
+        (this.current.ambientCount > 0 && this.values.ambientSpeed > 0)));
     const visible = typeof document === 'undefined' || !document.hidden;
     const particlesVisible = !(this.values.fade && this.current.progress >= 1);
     const warmingUp = this.adaptiveWarmupPending || this.adaptiveController().isWarmingUp(now, dt * 1000);

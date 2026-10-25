@@ -9,6 +9,10 @@ export interface ParticleAsset {
   /** Linear RGB, ready for Three.js shader color calculations. */
   colors: Float32Array;
   seeds: Float32Array;
+  /** Unit surface normals in the same coordinates as positions. Optional for older projects. */
+  normals?: Float32Array;
+  /** Per-particle [region, edge release weight, organ (0 petal / 1 centre / 2 stem)]. */
+  surface?: Float32Array;
   count: number;
   hasOriginalColors: boolean;
   notes: string[];
@@ -106,12 +110,15 @@ function linearChannel(value: number): number { return value <= 0.04045 ? value 
 
 export function createSphereAsset(): ParticleAsset {
   const positions = new Float32Array(POOL_SIZE * 3); const colors = new Float32Array(POOL_SIZE * 3);
+  const normals = new Float32Array(POOL_SIZE * 3); const surface = new Float32Array(POOL_SIZE * 3);
   for (let i = 0; i < POOL_SIZE; i++) {
     const y = 1 - 2 * radicalInverse(i + 1, 2); const angle = Math.PI * 2 * radicalInverse(i + 1, 3); const r = Math.sqrt(1 - y * y);
     positions.set([RADIUS * r * Math.cos(angle), RADIUS * y, RADIUS * r * Math.sin(angle)], i * 3);
     colors.set([FALLBACK_COLOR.r, FALLBACK_COLOR.g, FALLBACK_COLOR.b], i * 3);
+    normals.set([r * Math.cos(angle), y, r * Math.sin(angle)], i * 3);
+    surface.set([(Math.atan2(positions[i * 3 + 2], positions[i * 3]) / (Math.PI * 2) + 1) % 1, 0.4, 0], i * 3);
   }
-  return { name: '粒子球体', kind: 'sphere', positions, colors, seeds: createParticleSeeds(POOL_SIZE), count: POOL_SIZE, hasOriginalColors: false, notes: [] };
+  return { name: '粒子球体', kind: 'sphere', positions, colors, normals, surface, seeds: createParticleSeeds(POOL_SIZE), count: POOL_SIZE, hasOriginalColors: false, notes: [] };
 }
 
 /** Pure image sampling used by both the browser importer and regression tests. */
@@ -148,6 +155,7 @@ function* imageSamplingSteps(width: number, height: number, pixels: Uint8Clamped
   const scale = radiusSquared > 0 ? RADIUS / Math.sqrt(radiusSquared) : 1;
   const count = Math.min(POOL_SIZE, validCount);
   const positions = new Float32Array(count * 3); const colors = new Float32Array(count * 3);
+  const normals = new Float32Array(count * 3); const surface = new Float32Array(count * 3);
   // Shuffle once with a fixed seed. Reversing bits of a flattened pixel index
   // aliases with widths such as 736 and selects whole columns in early prefixes.
   // This permutation keeps prefixes stable and unique without a spatial lattice.
@@ -163,10 +171,19 @@ function* imageSamplingSteps(width: number, height: number, pixels: Uint8Clamped
     const pixel = valid[n]; const p = pixel * 4;
     positions.set([((pixel % width) - centerX) * scale, (centerY - Math.floor(pixel / width)) * scale, 0], n * 3);
     colors.set([linearChannel(pixels[p] / 255), linearChannel(pixels[p + 1] / 255), linearChannel(pixels[p + 2] / 255)], n * 3);
+    normals[n * 3 + 2] = 1;
+    const x = pixel % width; const y = Math.floor(pixel / width);
+    const borderDistance = Math.min(x - minX, maxX - x, y - minY, maxY - y);
+    let rim = borderDistance < 4 ? 1 - Math.max(0, borderDistance) / 4 : 0;
+    for (const [dx, dy] of [[-2, 0], [2, 0], [0, -2], [0, 2]]) {
+      const nx = x + dx; const ny = y + dy;
+      if (nx >= 0 && nx < width && ny >= 0 && ny < height && pixels[(ny * width + nx) * 4 + 3] === 0) rim = 1;
+    }
+    surface.set([0.5 + Math.sin(x / Math.max(1, width) * 7 + y / Math.max(1, height) * 5) * 0.45, rim, 0], n * 3);
   }
   const notes = count < POOL_SIZE ? [`有效像素为 ${validCount.toLocaleString()} 个，最多生成 ${count.toLocaleString()} 个不重复粒子。`] : [];
   if (partialAlpha) notes.push('图片包含半透明像素；本版用 Alpha 过滤全透明区域，粒子透明度由统一参数控制。');
-  return { name, kind: 'image', positions, colors, seeds: createParticleSeeds(count), count, hasOriginalColors: true, notes };
+  return { name, kind: 'image', positions, colors, normals, surface, seeds: createParticleSeeds(count), count, hasOriginalColors: true, notes };
 }
 
 /** Read dimensions before decoding; handles PNG IHDR and baseline/progressive JPEG SOF. */
@@ -236,7 +253,7 @@ async function loadImage(file: File): Promise<ParticleAsset> {
 }
 
 type ColorMaterial = THREE.Material & { color?: THREE.Color; map?: THREE.Texture | null };
-interface Triangle { geometry: THREE.BufferGeometry; material: ColorMaterial | undefined; matrix: THREE.Matrix4; a: number; b: number; c: number; area: number }
+interface Triangle { geometry: THREE.BufferGeometry; material: ColorMaterial | undefined; matrix: THREE.Matrix4; normalMatrix: THREE.Matrix3; region: number; a: number; b: number; c: number; area: number }
 interface Raster { width: number; height: number; pixels: Uint8ClampedArray }
 
 function textureRaster(texture: THREE.Texture): Raster | null {
@@ -265,6 +282,7 @@ function* modelSamplingSteps(scene: THREE.Object3D, name: string, initialNotes: 
   scene.updateMatrixWorld(true);
   const notes = [...initialNotes]; const triangles: Triangle[] = []; const a = new THREE.Vector3(); const b = new THREE.Vector3(); const c = new THREE.Vector3(); const edge = new THREE.Vector3(); const cross = new THREE.Vector3();
   let skippedMeshes = 0; let invalidTriangles = 0;
+  let meshIndex = 0;
   const objects: THREE.Object3D[] = []; scene.traverse(object => objects.push(object));
   for (const object of objects) {
     if (!(object instanceof THREE.Mesh)) { if (object instanceof THREE.Points || object instanceof THREE.Line) skippedMeshes++; continue; }
@@ -274,6 +292,8 @@ function* modelSamplingSteps(scene: THREE.Object3D, name: string, initialNotes: 
     if (!position || position.itemSize < 3) { skippedMeshes++; continue; }
     const length = index ? index.count : position.count;
     if (length % 3) { skippedMeshes++; continue; }
+    const normalMatrix = new THREE.Matrix3().getNormalMatrix(mesh.matrixWorld);
+    const region = radicalInverse(++meshIndex, 2);
     const start = Math.max(0, Math.ceil(geometry.drawRange.start / 3) * 3); const end = Math.min(length, Number.isFinite(geometry.drawRange.count) ? geometry.drawRange.start + geometry.drawRange.count : length);
     for (let offset = start; offset + 2 < end; offset += 3) {
       if (offset > start && (offset - start) % 24_576 === 0) yield;
@@ -285,7 +305,7 @@ function* modelSamplingSteps(scene: THREE.Object3D, name: string, initialNotes: 
       let material: ColorMaterial | undefined;
       if (Array.isArray(mesh.material)) { const group = geometry.groups.find(group => offset >= group.start && offset < group.start + group.count); material = group ? mesh.material[group.materialIndex ?? 0] as ColorMaterial : undefined; }
       else material = mesh.material as ColorMaterial;
-      triangles.push({ geometry, material, matrix: mesh.matrixWorld, a: ia, b: ib, c: ic, area });
+      triangles.push({ geometry, material, matrix: mesh.matrixWorld, normalMatrix, region, a: ia, b: ib, c: ic, area });
       if (triangles.length > MAX_TRIANGLES) throw new Error('模型超过 1,000,000 个有效三角面，请先简化模型再导入。');
     }
   }
@@ -296,6 +316,8 @@ function* modelSamplingSteps(scene: THREE.Object3D, name: string, initialNotes: 
   triangles.forEach((triangle, index) => { total += triangle.area; cumulative[index] = total; });
   // Keep full precision until centered, so far-away node translations do not collapse small geometry.
   const positions = new Float64Array(POOL_SIZE * 3); const colors = new Float32Array(POOL_SIZE * 3); const rasters = new Map<THREE.Texture, Raster | null>(); const warned = new Set<string>(); const uv = new THREE.Vector2();
+  const normals = new Float32Array(POOL_SIZE * 3); const surface = new Float32Array(POOL_SIZE * 3);
+  const sampleNormal = new THREE.Vector3(); const localNormal = new THREE.Vector3();
   let hasOriginalColors = false;
   const warn = (key: string, text: string) => { if (!warned.has(key)) { warned.add(key); notes.push(text); } };
   for (let i = 0; i < POOL_SIZE; i++) {
@@ -304,6 +326,25 @@ function* modelSamplingSteps(scene: THREE.Object3D, name: string, initialNotes: 
     const weights = sampleTriangleWeights(i); const attribute = triangle.geometry.getAttribute('position'); const vertexIds = [triangle.a, triangle.b, triangle.c];
     a.fromBufferAttribute(attribute, triangle.a).applyMatrix4(triangle.matrix); b.fromBufferAttribute(attribute, triangle.b).applyMatrix4(triangle.matrix); c.fromBufferAttribute(attribute, triangle.c).applyMatrix4(triangle.matrix);
     positions.set([a.x * weights[0] + b.x * weights[1] + c.x * weights[2], a.y * weights[0] + b.y * weights[1] + c.y * weights[2], a.z * weights[0] + b.z * weights[1] + c.z * weights[2]], i * 3);
+    const normalAttribute = triangle.geometry.getAttribute('normal');
+    sampleNormal.set(0, 0, 0);
+    if (normalAttribute && normalAttribute.itemSize >= 3 && vertexIds.every(id => id < normalAttribute.count)) {
+      for (let n = 0; n < 3; n++) sampleNormal.addScaledVector(localNormal.fromBufferAttribute(normalAttribute, vertexIds[n]), weights[n]);
+      sampleNormal.applyMatrix3(triangle.normalMatrix);
+    }
+    if (!Number.isFinite(sampleNormal.lengthSq()) || sampleNormal.lengthSq() < 1e-12) sampleNormal.subVectors(b, a).cross(edge.subVectors(c, a));
+    sampleNormal.normalize(); normals.set([sampleNormal.x, sampleNormal.y, sampleNormal.z], i * 3);
+    // GLTFLoader preserves application-defined attributes under lowercase names.
+    const semantic = triangle.geometry.getAttribute('_surface') || triangle.geometry.getAttribute('surface');
+    const validSemantic = semantic && semantic.itemSize >= 3 && vertexIds.every(id => id < semantic.count && [semantic.getX(id), semantic.getY(id), semantic.getZ(id)].every(Number.isFinite));
+    if (validSemantic) {
+      const values = [0, 0, 0];
+      for (let n = 0; n < 3; n++) { values[0] += semantic.getX(vertexIds[n]) * weights[n]; values[1] += semantic.getY(vertexIds[n]) * weights[n]; values[2] += semantic.getZ(vertexIds[n]) * weights[n]; }
+      surface.set([Math.min(1, Math.max(0, values[0])), Math.min(1, Math.max(0, values[1])), Math.min(2, Math.max(0, values[2]))], i * 3);
+    } else {
+      surface.set([triangle.region, Math.pow(Math.max(0, 1 - Math.abs(sampleNormal.z)), 2), 0], i * 3);
+      if (semantic) warn('surface', '部分局部流动分区无效，已按静态网格区域推定。');
+    }
     const material = triangle.material; const colorAttribute = triangle.geometry.getAttribute('color');
     const colorCandidate = material?.color;
     const base = colorCandidate && [colorCandidate.r, colorCandidate.g, colorCandidate.b].every(Number.isFinite) ? colorCandidate : undefined;
@@ -337,7 +378,7 @@ function* modelSamplingSteps(scene: THREE.Object3D, name: string, initialNotes: 
     colors.set([Number.isFinite(r) ? Math.max(0, r) : FALLBACK_COLOR.r, Number.isFinite(g) ? Math.max(0, g) : FALLBACK_COLOR.g, Number.isFinite(blue) ? Math.max(0, blue) : FALLBACK_COLOR.b], i * 3);
   }
   yield* normalizationSteps(positions);
-  return { name, kind: 'model', positions: new Float32Array(positions), colors, seeds: createParticleSeeds(POOL_SIZE), count: POOL_SIZE, hasOriginalColors, notes };
+  return { name, kind: 'model', positions: new Float32Array(positions), colors, normals, surface, seeds: createParticleSeeds(POOL_SIZE), count: POOL_SIZE, hasOriginalColors, notes };
 }
 
 export function disposeAssetScenes(scenes: THREE.Object3D[]): void {

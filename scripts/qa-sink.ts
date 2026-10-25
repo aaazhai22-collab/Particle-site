@@ -36,7 +36,7 @@ export function qaSink(): Plugin {
       let savedVideo: { path: string; mime: string; filename: string } | null = null;
       server.middlewares.use(async (request, response, next) => {
         const pathname = new URL(request.url || '/', 'http://localhost').pathname;
-        if (pathname !== '/__qa/video' && pathname !== '/__qa/report') return next();
+        if (pathname !== '/__qa/video' && pathname !== '/__qa/report' && pathname !== '/__qa/frame') return next();
         try {
           if (request.method === 'POST') {
             // The visible QA page makes a deliberate same-origin request with this header.
@@ -44,6 +44,14 @@ export function qaSink(): Plugin {
             const origin = request.headers.origin;
             if (origin && new URL(origin).host !== request.headers.host) return json(response, 403, { error: '只允许同源本地 QA 请求。' });
             await mkdir(output, { recursive: true });
+            if (pathname === '/__qa/frame') {
+              const name = String(request.headers['x-particle-name'] || 'petal-frame');
+              if (!/^petal-[a-z0-9-]{1,60}$/.test(name) || request.headers['content-type'] !== 'image/png') return json(response, 400, { error: '请使用合法的花朵 PNG 验证名称。' });
+              const body = await boundedBody(request, 20 * 1024 * 1024);
+              if (body.length < 8 || body.readUInt32BE(0) !== 0x89504e47) return json(response, 415, { error: '只接收实际 PNG 截图。' });
+              await writeFile(resolve(output, name + '.png'), body);
+              return json(response, 200, { path: 'artifacts/' + name + '.png' });
+            }
             if (pathname === '/__qa/video') {
               const type = (request.headers['content-type'] || '').split(';')[0].trim().toLowerCase();
               if (type !== 'video/mp4' && type !== 'video/webm') return json(response, 415, { error: '仅接收真实 MP4 或 WebM 录像。' });

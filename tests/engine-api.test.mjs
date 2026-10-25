@@ -35,6 +35,9 @@ function editingEngine(options = {}) {
     'uAxis', 'uErosion', 'uFlowScale', 'uStringiness', 'uTrail', 'uWaveRhythm', 'uMode',
     'uDepth', 'uScatter', 'uStagger', 'uIsImage', 'uProgress', 'uTime', 'uTrailTimeSpan', 'uTrailProgressSpan',
     'uCurl', 'uSparkle', 'uDensityOpacity',
+    'uSurfaceMode', 'uPetalFlow', 'uAmbientPhase', 'uAmbientRange', 'uTimelineActive',
+    'uTimelineTime', 'uTimelineDuration', 'uMotionSpeed', 'uProgressHistory',
+    'uOutputScale',
   ].map((name) => [name, { value: 0 }]));
   uniforms.uColor = { value: new THREE.Color() };
   uniforms.uDirection = { value: new THREE.Vector3() };
@@ -42,11 +45,11 @@ function editingEngine(options = {}) {
     values: { ...DEFAULT_PARAMS, autoCount: options.auto ?? false, count: options.count ?? 30000 }, asset: asset(options.capacity ?? 40_000),
     current: {
       progress: 0.42, running: true, mode: 'loop', direction: -1, time: 12, fps: 60,
-      actualCount: 30_000, timelineTime: 2, timelineDuration: 6, timelineLoop: true,
+      actualCount: 30_000, ambientCount: 0, filamentCount: 0, timelineTime: 2, timelineDuration: 6, timelineLoop: true,
       adaptiveStatus: '', adaptiveCeiling: 30000, frameMsAvg: 0,
     },
     geometry: new THREE.BufferGeometry(), trailGeometry: new THREE.InstancedBufferGeometry(),
-    points: {}, trails: {}, material: { uniforms },
+    ambientGeometry: new THREE.BufferGeometry(), points: {}, trails: {}, ambientPoints: {}, material: { uniforms },
     renderer: { calls: 0, render() { this.calls++; } },
     controls: Object.assign(new THREE.EventDispatcher(), { update: () => false }),
     object: new THREE.Group(), camera: new THREE.PerspectiveCamera(),
@@ -55,14 +58,14 @@ function editingEngine(options = {}) {
       { id: 'b', time: 3, scale: 2, rotation: [0, 90, 0], progress: 1 },
       { id: 'c', time: 6, scale: 1, rotation: [0, 180, 0], progress: 0 },
     ] },
-    timelineMode: true, progressLookup: new Float32Array(1025),
+    timelineMode: true, effect: 'radial', progressLookup: new Float32Array(1025), ambientClock: 0,
     pendingEffect: null, destroyed: false, onUpdate: () => {},
     lastFrame: 0, lastUpdate: 0, fpsStart: 0, fpsFrames: 0, requestId: 0,
     needsRendering: true, cameraDirty: false, captureActive: false, trailProgressVelocity: 0,
     activeCount: 30000, adaptive: null, recordingLocked: false,
     adaptiveWarmupPending: true, adaptiveWarmupReason: '图形首次编译预热，暂不判断设备性能',
     renderedTrails: false, renderedBloom: false, pageHidden: false,
-    postProcessing: { configure() {}, render() { engine.renderer.render(); } },
+    postProcessing: { configure() {}, setSize() {}, render() { engine.renderer.render(); } },
   });
   engine.controlsChange = engine.handleControlsChange.bind(engine);
   engine.controls.addEventListener('change', engine.controlsChange);
@@ -248,6 +251,7 @@ test('destroy removes the controls change listener', () => {
     engine.canvas = { removeEventListener() {}, remove() {} };
     engine.material.dispose = () => {};
     engine.trailMaterial = { dispose() {} };
+    engine.ambientMaterial = { dispose() {} };
     engine.postProcessing.dispose = () => {};
     engine.renderer.dispose = () => {};
     engine.renderer.forceContextLoss = () => {};
@@ -319,9 +323,9 @@ test('hidden idle editors cancel RAF and resuming does not integrate the hidden 
     engine.syncVisibility();
     assert.equal(engine.requestId, 8);
     engine.tick(100000);
-    assert.equal(engine.state.time, 12);
+    assert.equal(engine.state.time, 2);
     engine.tick(100016);
-    assert.ok(Math.abs(engine.state.time - 12.016) < 1e-9);
+    assert.ok(Math.abs(engine.state.time - 2.016) < 1e-9);
   } finally {
     globalThis.document = oldDocument;
     globalThis.requestAnimationFrame = oldRAF;
@@ -350,7 +354,7 @@ test('visual controls reach the HDR pipeline and curl/sparkle shader uniforms', 
   assert.equal(engine.params.contrast, 0.5);
   assert.equal(engine.material.uniforms.uCurl.value, 2.4);
   assert.equal(engine.material.uniforms.uSparkle.value, 0.75);
-  assert.deepEqual(calls.at(-1), [0.8, 3, 0.5]);
+  assert.deepEqual(calls.at(-1), [0.8, 3, 0.5, false]);
 });
 
 test('manual 180k and 300k settings draw the real prefix without creating another full trail pool', () => {
@@ -510,4 +514,150 @@ test('free recording still applies manual density changes during capture and its
     globalThis.document = oldDocument;
     globalThis.requestAnimationFrame = oldRAF;
   }
+});
+
+test('petal layers use independent bounded prefixes while the main geometry and playback remain stable', () => {
+  const engine = editingEngine({ count: 30000, capacity: 500000 });
+  engine.effect = 'erosion';
+  engine.setAsset(asset(500000));
+  const geometry = engine.geometry;
+  const mainSeed = geometry.getAttribute('aSeed').array;
+  const progress = engine.state.progress;
+  engine.setParams({ surfaceMode: true, petalFlow: true, ambient: 0.02, trail: 0.6, colorMode: 'uniform' });
+  assert.equal(engine.state.actualCount, 30000);
+  assert.equal(engine.state.ambientCount, 600);
+  assert.equal(engine.state.filamentCount, 900);
+  assert.equal(engine.ambientGeometry.drawRange.count, 600);
+  assert.equal(engine.trailGeometry.instanceCount, 900);
+  assert.equal(engine.trailGeometry.getAttribute('position').count, 48);
+  assert.equal(engine.material.depthWrite, true);
+  assert.equal(engine.material.blending, THREE.NormalBlending);
+  assert.equal(engine.material.uniforms.uOriginalColor.value, 0, 'the user can override the preset with uniform colour');
+  engine.setParams({ count: 180000 });
+  assert.equal(engine.state.ambientCount, 3600);
+  assert.equal(engine.state.filamentCount, 1000);
+  assert.equal(engine.geometry, geometry);
+  assert.equal(engine.geometry.getAttribute('aSeed').array, mainSeed);
+  assert.equal(engine.state.progress, progress);
+  engine.setParams({ surfaceMode: false, petalFlow: false });
+  assert.equal(engine.state.ambientCount, 0);
+  assert.equal(engine.state.filamentCount, 0);
+  assert.equal(engine.trailGeometry.getAttribute('position').count, 6);
+  assert.equal(engine.material.depthWrite, false);
+  assert.equal(engine.material.blending, THREE.AdditiveBlending);
+});
+
+test('the retained petal preset flag cannot override the other five effect modes', () => {
+  const engine = editingEngine();
+  engine.setParams({ surfaceMode: true, petalFlow: true, trail: 0.6 });
+  for (const [index, effect] of ['radial', 'noise', 'vortex', 'directional', 'wave', 'erosion'].entries()) {
+    engine.setProgress(0);
+    engine.setEffect(effect);
+    assert.equal(engine.params.petalFlow, true, 'switching modes keeps the shared preset controls');
+    assert.equal(engine.material.uniforms.uMode.value, index);
+    assert.equal(engine.material.uniforms.uPetalFlow.value, effect === 'erosion' ? 1 : 0);
+    assert.equal(engine.trailGeometry.getAttribute('position').count, effect === 'erosion' ? 48 : 6);
+    assert.equal(engine.state.filamentCount, effect === 'erosion' ? 900 : 0);
+  }
+});
+
+test('petal flow respects switching between original and the selected uniform colour', () => {
+  const engine = editingEngine();
+  engine.effect = 'erosion';
+  const originalColours = engine.asset.colors.slice();
+  engine.setParams({ surfaceMode: true, petalFlow: true, colorMode: 'original' });
+  assert.equal(engine.material.uniforms.uOriginalColor.value, 1);
+  engine.setParams({ colorMode: 'uniform', color: '#22ccff' });
+  assert.equal(engine.params.colorMode, 'uniform');
+  assert.equal(engine.material.uniforms.uOriginalColor.value, 0);
+  const expected = new THREE.Color('#22ccff');
+  for (const channel of ['r', 'g', 'b']) assert.equal(engine.material.uniforms.uColor.value[channel], expected[channel]);
+  engine.setParams({ colorMode: 'original' });
+  assert.equal(engine.material.uniforms.uOriginalColor.value, 1);
+  assert.deepEqual(engine.asset.colors, originalColours);
+});
+
+test('surface inputs reach all three layers and missing or invalid optional data has a finite fallback', () => {
+  const engine = editingEngine();
+  const source = asset(4);
+  source.normals = new Float32Array([0, 2, 0, NaN, 0, 0, 0, 0, 0, 0, 0, -1]);
+  source.surface = new Float32Array([0.25, 0.8, 1, NaN, 0, 0, 0.5, 0.7, 2, 0.75, 1, 0]);
+  engine.setAsset(source);
+  assert.deepEqual([...engine.geometry.getAttribute('aNormal').array.slice(0, 3)], [0, 1, 0]);
+  assert.deepEqual([...engine.geometry.getAttribute('aSurface').array.slice(0, 3)], [0.25, Math.fround(0.8), 1]);
+  for (const geometry of [engine.geometry, engine.trailGeometry, engine.ambientGeometry]) {
+    assert.ok([...geometry.getAttribute('aNormal').array].every(Number.isFinite));
+    assert.ok([...geometry.getAttribute('aSurface').array].every(Number.isFinite));
+  }
+  assert.equal(engine.geometry.getAttribute('position').array, source.positions);
+});
+
+test('seeking and playing to the same timeline second use identical motion phases and trail inputs', () => {
+  const engine = editingEngine();
+  engine.effect = 'erosion';
+  engine.setParams({ surfaceMode: true, petalFlow: true, motionSpeed: 0.7 });
+  engine.setTimeline({ duration: 36, keyframes: [
+    { id: 'a', time: 0, scale: 1, rotation: [0, 0, 0], progress: 0 },
+    { id: 'b', time: 24, scale: 1, rotation: [0, 0, 0], progress: 1 },
+    { id: 'c', time: 36, scale: 1, rotation: [0, 0, 0], progress: 0 },
+  ] });
+  const inputs = () => Object.fromEntries(['uProgress', 'uTime', 'uAmbientPhase', 'uTimelineTime', 'uTrailTimeSpan', 'uTrailProgressSpan']
+    .map(name => [name, engine.material.uniforms[name].value]));
+  engine.seekTimeline(12); engine.render();
+  const sought = inputs();
+  assert.ok(Math.abs(engine.state.time - 8.4) < 1e-10);
+  engine.seekTimeline(0); engine.setTimelinePlaying(true);
+  engine.tick(1000); engine.tick(13000);
+  assert.deepEqual(inputs(), sought);
+  engine.seekTimeline(30); engine.seekTimeline(12); engine.render();
+  assert.deepEqual(inputs(), sought);
+  const texture = engine.material.uniforms.uProgressHistory.value;
+  assert.equal(texture.image.data, engine.progressLookup);
+  assert.equal(texture.image.width, 1025);
+  assert.equal(texture.minFilter, THREE.NearestFilter);
+});
+
+test('36-second endpoints close the ambient layer exactly and fade hides every layer', () => {
+  const engine = editingEngine();
+  engine.effect = 'erosion';
+  engine.setParams({ surfaceMode: true, petalFlow: true, fade: true });
+  engine.setTimeline({ duration: 36, keyframes: [
+    { id: 'a', time: 0, scale: 1, rotation: [0, 0, 0], progress: 0 },
+    { id: 'b', time: 25, scale: 1, rotation: [0, 0, 0], progress: 1 },
+    { id: 'c', time: 36, scale: 1, rotation: [0, 0, 0], progress: 0 },
+  ] });
+  engine.seekTimeline(0); engine.render();
+  assert.equal(engine.ambientPoints.visible, true);
+  const phase = engine.material.uniforms.uAmbientPhase.value;
+  engine.seekTimeline(36); engine.render();
+  assert.equal(engine.material.uniforms.uAmbientPhase.value, phase);
+  assert.equal(engine.state.progress, 0);
+  assert.equal(engine.trails.visible, false);
+  engine.seekTimeline(25); engine.render();
+  assert.equal(engine.points.visible, false);
+  assert.equal(engine.trails.visible, false);
+  assert.equal(engine.ambientPoints.visible, false);
+});
+
+test('output resolution resizes the real canvas/HDR graph and is locked throughout recording', () => {
+  const engine = editingEngine();
+  const calls = [];
+  engine.renderer.setSize = (...args) => calls.push(['canvas', ...args]);
+  engine.postProcessing.setSize = (...args) => calls.push(['hdr', ...args]);
+  const camera = engine.camera.position.clone();
+  const before = engine.state;
+  engine.setParams({ resolution: '1080p' });
+  assert.deepEqual(calls, [['canvas', 1920, 1080, false], ['hdr', 1920, 1080]]);
+  assert.equal(engine.params.resolution, '1080p');
+  assert.equal(engine.state.progress, before.progress);
+  assert.equal(engine.state.running, before.running);
+  assert.deepEqual(engine.camera.position, camera);
+  assert.equal(engine.adaptiveWarmupPending, true);
+  engine.setRecordingLocked(true);
+  engine.setParams({ resolution: '720p' });
+  assert.equal(engine.params.resolution, '1080p');
+  assert.equal(calls.length, 2);
+  engine.setRecordingLocked(false);
+  engine.setParams({ resolution: '720p' });
+  assert.deepEqual(calls.slice(-2), [['canvas', 1280, 720, false], ['hdr', 1280, 720]]);
 });

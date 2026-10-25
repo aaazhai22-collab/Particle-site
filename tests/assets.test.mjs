@@ -15,6 +15,37 @@ const assets = await import(`data:text/javascript;base64,${Buffer.from(outputTex
 const maximumRadius = positions => { let value = 0; for (let i = 0; i < positions.length; i += 3) value = Math.max(value, Math.hypot(positions[i], positions[i + 1], positions[i + 2])); return value; };
 const geometry = () => new THREE.BufferGeometry().setAttribute('position', new THREE.Float32BufferAttribute([0, 0, 0, 2, 0, 0, 0, 1, 0], 3));
 
+test('surface normals use inverse transpose across nonuniform rotated world transforms', () => {
+  const shape = geometry();
+  const localNormal = new THREE.Vector3(1, 1, 1).normalize();
+  shape.setAttribute('normal', new THREE.Float32BufferAttribute(Array(3).fill(localNormal.toArray()).flat(), 3));
+  const mesh = new THREE.Mesh(shape, new THREE.MeshBasicMaterial());
+  mesh.scale.set(3, .5, 2); mesh.rotation.set(.3, -.7, .2);
+  const scene = new THREE.Group(); scene.add(mesh); scene.updateMatrixWorld(true);
+  const expected = localNormal.clone().applyMatrix3(new THREE.Matrix3().getNormalMatrix(mesh.matrixWorld)).normalize();
+  const asset = assets.sampleModelScene(scene, 'normal.glb');
+  for (const i of [0, 100, 29999, asset.count - 1]) {
+    const actual = new THREE.Vector3().fromArray(asset.normals, i * 3);
+    assert.ok(actual.distanceTo(expected) < 2e-7);
+    assert.ok(Math.abs(actual.length() - 1) < 2e-7);
+  }
+});
+
+test('GLB semantic region/edge/organ survive barycentric sampling without changing immutable prefixes', () => {
+  const shape = geometry();
+  shape.setAttribute('_surface', new THREE.Float32BufferAttribute([.25, 0, 1, .25, 1, 1, .25, .5, 1], 3));
+  const scene = new THREE.Group(); scene.add(new THREE.Mesh(shape, new THREE.MeshBasicMaterial({ color: '#f84291' })));
+  const first = assets.sampleModelScene(scene, 'semantic.glb');
+  const second = assets.sampleModelScene(scene, 'semantic.glb');
+  for (const i of [0, 100, 29999, first.count - 1]) {
+    const w = assets.sampleTriangleWeights(i);
+    assert.equal(first.surface[i * 3], .25); assert.equal(first.surface[i * 3 + 2], 1);
+    assert.ok(Math.abs(first.surface[i * 3 + 1] - (w[1] + .5 * w[2])) < 1e-7);
+    assert.deepEqual([...first.normals.subarray(i * 3, i * 3 + 3)], [0, 0, 1]);
+  }
+  assert.deepEqual(first.positions, second.positions); assert.deepEqual(first.surface, second.surface);
+});
+
 test('sphere and seed pools retain an identical prefix and exact source radius', () => {
   const first = assets.createSphereAsset(); const second = assets.createSphereAsset();
   assert.equal(first.count, MAX_PARTICLES); assert.equal(first.kind, 'sphere');

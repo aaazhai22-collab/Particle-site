@@ -42,3 +42,11 @@
 - `fully-transparent.png`：64 × 64 全透明图片，应该提示无法生成粒子。
 - `corrupt-image.png` 与 `corrupt-model.glb`：故意损坏的文件，应该显示中文错误且保留既有场景。
 - `no-static-mesh.glb`：有效 glTF 2.0 二进制文件，但场景没有网格，应该提示无有效静态网格。
+# 花瓣微流 · 完整立体花朵（v0.5）
+
+`petal-model.glb` 为参考风格的艺术近似，包含六片闭合厚度花瓣、108 组立体花丝与花药、花托、萼片、短茎与叶。原色使用线性 RGB 顶点颜色内嵌，不需要额外纹理文件；黑色背景不属于模型。静态 GLB 可下载并重新导入。
+
+每个顶点有法线及 `_SURFACE` 局部信息，分别表示区域、边缘释放权重和器官分类。通用 GLB 也能导入；缺少局部信息时按网格与表面推定，不要求用户预处理自己的模型。
+
+`petal-preview-front.png`、`petal-preview-three-quarter.png`、`petal-preview-side.png`、`petal-preview-back.png` 为几何预览，`petal-model-metadata.json` 记录实际统计和几何验证。使用 `scripts/generate-petal-model.py` 可重建；该模型不是参考视频原始模型，也不是从水印截图贴出的平面。
+

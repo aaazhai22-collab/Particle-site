@@ -17,8 +17,8 @@ try {
     for(let j=0;j<3;j++){seed^=seed<<13;seed^=seed>>>17;seed^=seed<<5;seeds[i*3+j]=(seed>>>0)/4294967296;}
   }
   function compile(type,text){const shader=gl.createShader(type);gl.shaderSource(shader,text);gl.compileShader(shader);if(!gl.getShaderParameter(shader,gl.COMPILE_STATUS))throw Error(gl.getShaderInfoLog(shader));return shader;}
-  const vertex=`#version 300 es\nprecision highp float;\nin vec3 position;\nuniform mat4 modelViewMatrix;\nuniform mat4 projectionMatrix;\nout vec3 testedPosition;\n`+
-    particleVertexShader.replaceAll('attribute ','in ').replaceAll('varying ','out ').replace('vec4 viewPosition =','testedPosition = displaced;\n vec4 viewPosition =');
+  const vertex=`#version 300 es\nprecision highp float;\nin vec3 position;\nuniform mat4 modelViewMatrix;\nuniform mat4 projectionMatrix;\nuniform mat3 normalMatrix;\nout vec3 testedPosition;\n`+
+    particleVertexShader.replaceAll('attribute ','in ').replaceAll('varying ','out ').replaceAll('texture2D(', 'texture(').replace('vec4 viewPosition =','testedPosition = displaced;\n vec4 viewPosition =');
   const program=gl.createProgram();
   gl.attachShader(program,compile(gl.VERTEX_SHADER,vertex));
   gl.attachShader(program,compile(gl.FRAGMENT_SHADER,'#version 300 es\nprecision highp float;out vec4 colour;void main(){colour=vec4(1.0);}'));
@@ -38,6 +38,7 @@ try {
   const identity=new Float32Array([1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1]);
   gl.uniformMatrix4fv(gl.getUniformLocation(program,'modelViewMatrix'),false,identity);
   gl.uniformMatrix4fv(gl.getUniformLocation(program,'projectionMatrix'),false,identity);
+  gl.uniformMatrix3fv(gl.getUniformLocation(program,'normalMatrix'),false,new Float32Array([1,0,0,0,1,0,0,0,1]));
   function sample(mode,progress,parameters={}){
     const values={...defaults,...parameters,uMode:mode,uProgress:progress};
     for(const[name,value]of Object.entries(values))gl.uniform1f(gl.getUniformLocation(program,name),value);
@@ -74,6 +75,12 @@ try {
   check('六种效果没有退化为同一位移',clouds.every((cloud,index)=>index===0||!exact(cloud,clouds[index-1])));
   check('随机散开控制影响实际逐点位置',!exact(sample(3,.7,{uScatter:0}),sample(3,.7,{uScatter:1})));
   check('卷曲强度控制实际流线路径',!exact(sample(5,.7,{uCurl:0}),sample(5,.7,{uCurl:2.5})));
+  check('花瓣微流：归零精确还原不可变位置',exact(sample(5,0,{uPetalFlow:1}),source));
+  const petalCloud=sample(5,.7,{uPetalFlow:1});
+  check('花瓣微流：真正三维曲面释放',petalCloud.every(Number.isFinite)&&span(petalCloud,2)>.1&&residualDepth(petalCloud)>.02);
+  check('花瓣微流：时间改变相关微流',!exact(sample(5,.7,{uPetalFlow:1,uTime:0}),sample(5,.7,{uPetalFlow:1,uTime:3})));
+  check('花瓣微流：同时间同形态不依赖求值历史',exact(sample(5,.7,{uPetalFlow:1}),petalCloud));
+  for(let mode=0;mode<5;mode++)check(names[mode]+'：花瓣开关不覆盖其他效果',exact(sample(mode,.7,{uPetalFlow:1}),sample(mode,.7,{uPetalFlow:0})));
   report.status='passed';report.total=report.checks.length;
 }catch(error){report.status='failed';report.error=String(error.stack||error);}
 finally{gl?.getExtension('WEBGL_lose_context')?.loseContext();}

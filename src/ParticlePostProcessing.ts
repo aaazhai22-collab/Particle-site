@@ -35,19 +35,28 @@ export class ParticlePostProcessing {
     this.composer.addPass(this.scenePass);
     this.composer.addPass(this.bloom);
     this.composer.addPass(this.output);
-    this.composer.setSize(1280, 720);
-    // UnrealBloom halves this again internally: its highest blur mip is
-    // 320×180; the scene and final output still contain all 1280×720 pixels.
-    this.bloom.setSize(640, 360);
+    this.setSize(1280, 720);
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
   }
 
-  configure(glow: number, exposure: number, contrast: number): void {
+  configure(glow: number, exposure: number, contrast: number, surfaceMode = false): void {
     this.bloom.enabled = glow > 0;
-    this.bloom.strength = glow * 0.9;
-    this.bloom.radius = 0.32 + Math.min(1, glow) * 0.16;
+    // Dense coloured surfaces need highlight bloom, not a blur of the entire
+    // silhouette. Radius zero also prevents zero-weight wide mips leaking back
+    // through UnrealBloom's mirrored radius interpolation.
+    this.bloom.threshold = surfaceMode ? 0.55 : 0.08;
+    this.bloom.strength = glow * (surfaceMode ? 0.32 : 0.9);
+    this.bloom.radius = surfaceMode ? 0 : 0.32 + Math.min(1, glow) * 0.16;
+    this.bloom.compositeMaterial.uniforms.bloomFactors.value = surfaceMode ? [1, 0.22, 0.025, 0, 0] : [1, 0.8, 0.6, 0.4, 0.2];
     this.renderer.toneMappingExposure = exposure;
     this.contrastUniform.value = contrast;
+  }
+
+  /** Resize the actual HDR output graph, not just the canvas's CSS box. */
+  setSize(width: number, height: number): void {
+    this.composer.setSize(width, height);
+    // Keep convolution at a bounded quarter-resolution highest mip.
+    this.bloom.setSize(Math.min(960, Math.round(width / 2)), Math.min(540, Math.round(height / 2)));
   }
 
   render(): void { this.composer.render(0); }

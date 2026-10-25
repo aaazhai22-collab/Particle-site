@@ -2,6 +2,8 @@
 export const particleVertexShader = /* glsl */ `
   attribute vec3 aSeed;
   attribute vec3 aColor;
+  attribute vec3 aNormal;
+  attribute vec3 aSurface;
   #ifdef TRAIL
     attribute vec3 aOrigin;
   #endif
@@ -30,12 +32,23 @@ export const particleVertexShader = /* glsl */ `
   uniform float uWaveRhythm;
   uniform vec3 uDirection;
   uniform vec3 uColor;
+  uniform float uSurfaceMode;
+  uniform float uPetalFlow;
+  uniform float uAmbientPhase;
+  uniform float uAmbientRange;
+  uniform float uTimelineActive;
+  uniform float uTimelineTime;
+  uniform float uTimelineDuration;
+  uniform float uMotionSpeed;
+  uniform float uOutputScale;
+  uniform sampler2D uProgressHistory;
   varying vec3 vColor;
   varying float vShimmer;
   varying float vVisibility;
   varying float vTrailAlpha;
   varying float vSpark;
   varying float vDistanceFade;
+  varying float vLocalAge;
 
   vec3 flow(vec3 p, float t) {
     return vec3(
@@ -73,6 +86,62 @@ export const particleVertexShader = /* glsl */ `
       pointOnCurve += (middleVelocity + uDirection * 0.32) * stepLength;
     }
     return pointOnCurve;
+  }
+
+  float petalAge(vec3 origin, float p) {
+    if (p <= 0.0) return 0.0;
+    vec3 q = origin * uFlowScale;
+    float islands = 0.5 + 0.23 * sin(q.x * 3.1 + q.y * 2.7) +
+                    0.21 * cos(q.y * 3.7 - q.z * 2.1 + aSurface.x * 6.2831853);
+    float centerOrgan = 1.0 - step(0.45, abs(aSurface.z - 1.0));
+    float stemOrgan = step(1.5, aSurface.z);
+    // Edge erosion is shared by local surface neighbours. Stamens stay intact
+    // longer, retaining the warm centre while cooler petal patches release.
+    float releaseAt = clamp(0.12 + islands * (0.28 + uStagger * 0.18) -
+      aSurface.y * uErosion * 0.17 + centerOrgan * 0.2 + stemOrgan * 0.1, 0.025, 0.72);
+    return smoothstep(releaseAt, min(1.0, releaseAt + 0.45), p);
+  }
+
+  vec3 surfaceNormal(vec3 original) {
+    if (dot(aNormal, aNormal) > 0.00001) return normalize(aNormal);
+    if (uIsImage > 0.5) return vec3(0.0, 0.0, 1.0);
+    return normalize(original + vec3(0.00001));
+  }
+
+  vec3 petalPosition(vec3 original, float age, float motionPhase) {
+    if (age <= 0.0) return original;
+    vec3 n = surfaceNormal(original);
+    vec3 fieldDirection = curlVelocity(original * uFlowScale, 0.0) + uDirection * 0.6;
+    vec3 tangent = fieldDirection - n * dot(fieldDirection, n) * 0.85;
+    tangent = normalize(tangent + vec3(0.0001));
+    vec3 across = normalize(cross(n, tangent) + vec3(0.0001));
+    float bend = age * (2.4 + uCurl * 2.5);
+    // Bounded, locally anchored curls avoid turning the entire flower into a
+    // translated sheet. Spread still changes reach, with a soft spatial limit.
+    float distance = 1.35 * 0.65 * uSpread / (0.65 + uSpread);
+    // A continuous surface map bends neighbouring samples into thin sheets.
+    // Its analytic curve can be addressed at any age without frame history.
+    vec3 offset = tangent * (sin(bend) * 0.5 + age * (0.08 + uStringiness * 0.045)) +
+                  across * (1.0 - cos(bend)) * (0.22 + uStringiness * 0.025) +
+                  n * sin(bend * 0.72) * 0.2;
+    offset += uDirection * age * age * 0.04;
+    offset += flow(original * 2.7, age * 1.8) * uTurbulence * age * 0.16;
+    // A small coherent time component keeps released fibres alive during a
+    // held shape. The engine addresses motionPhase from clip time, so seeking
+    // is deterministic and animation pause freezes it exactly.
+    offset += flow(original * 3.4 + vec3(age * 0.7), motionPhase * 0.7) *
+              age * (0.045 + uTurbulence * 0.1);
+    offset += (aSeed - 0.5) * uScatter * age * 0.055;
+    offset.z *= uDepth;
+    return original + offset * distance;
+  }
+
+  float progressAt(float seconds) {
+    float index = clamp(seconds / max(0.0001, uTimelineDuration), 0.0, 1.0) * 1024.0;
+    float left = floor(index);
+    float a = texture2D(uProgressHistory, vec2((left + 0.5) / 1025.0, 0.5)).r;
+    float b = texture2D(uProgressHistory, vec2((min(left + 1.0, 1024.0) + 0.5) / 1025.0, 0.5)).r;
+    return mix(a, b, fract(index));
   }
 
   vec3 displace(vec3 original, float p, float t, out float visibility) {
@@ -159,29 +228,87 @@ export const particleVertexShader = /* glsl */ `
     float p = uProgress;
     float t = uTime;
     float history = 0.0;
+    bool petalActive = uPetalFlow > 0.5 && uMode > 4.5;
     #ifdef TRAIL
       original = aOrigin;
       history = position.x;
-      p = clamp(uProgress - history * uTrailProgressSpan, 0.0, 1.0);
-      t = max(0.0, uTime - history * uTrailTimeSpan);
+      if (!petalActive) {
+        p = clamp(uProgress - history * uTrailProgressSpan, 0.0, 1.0);
+        t = max(0.0, uTime - history * uTrailTimeSpan);
+        if (uTimelineActive > 0.5) {
+          float historicalSecond = max(0.0, uTimelineTime - history * (0.18 + uTrail * 0.7));
+          p = progressAt(historicalSecond);
+          t = historicalSecond * uMotionSpeed;
+        }
+      }
     #endif
-    float visibility;
-    vec3 displaced = displace(original, p, t, visibility);
-    vec3 normal = normalize(original + vec3(0.00001));
+    float visibility = 1.0;
+    vec3 displaced;
+    vLocalAge = 0.0;
+    if (petalActive) {
+      vLocalAge = petalAge(original, uProgress);
+      float sampledAge = vLocalAge;
+      #ifdef TRAIL
+        sampledAge = max(0.0, sampledAge - history * (0.025 + uTrail * 0.085));
+      #endif
+      displaced = petalPosition(original, sampledAge, t);
+      #ifdef TRAIL
+        vec3 coilNormal = surfaceNormal(original);
+        vec3 coilGuide = curlVelocity(original * uFlowScale, 0.0) + uDirection * 0.6;
+        vec3 coilTangent = normalize(coilGuide - coilNormal * dot(coilGuide, coilNormal) * 0.85 + vec3(0.0001));
+        vec3 coilAcross = normalize(cross(coilNormal, coilTangent) + vec3(0.0001));
+        vec3 coilSide = normalize(coilAcross * 0.84 + coilNormal * 0.54);
+        float coilPhase = aSurface.x * 6.2831853 + aSeed.x * 0.9;
+        float coilAngle = history * 6.2831853 * (1.0 + aSeed.z * 0.5);
+        float coilRadius = (0.02 + aSeed.y * 0.04) * smoothstep(0.02, 0.18, vLocalAge);
+        // Difference-of-phases makes history zero exactly the real point head.
+        // The coil is local geometry, not a feedback image or accumulated path.
+        displaced += coilRadius * (coilTangent * (sin(coilPhase + coilAngle) - sin(coilPhase)) +
+                                   coilSide * (cos(coilPhase + coilAngle) - cos(coilPhase)));
+      #endif
+      visibility = 1.0 - smoothstep(0.28, 0.98, vLocalAge) * 0.86;
+    } else displaced = displace(original, p, t, visibility);
+    vec3 normal = surfaceNormal(original);
+    #ifdef AMBIENT
+      float phase = uAmbientPhase + aSeed.x * 6.2831853;
+      vec3 orbit = vec3(sin(phase), cos(phase + aSeed.y * 3.0), sin(phase + aSeed.z * 5.0));
+      float reach = (0.06 + uAmbientRange * 0.6) * (0.35 + aSeed.y * 0.65);
+      displaced += (normal * (0.045 + uAmbientRange * 0.1) + orbit * reach);
+      visibility = 0.45 + aSeed.z * 0.5;
+    #endif
     float frontLight = 0.76 + 0.24 * dot(normal, normalize(vec3(-0.3, 0.6, 1.0)));
     // Original RGB is used directly; the uniform mode gets gentle shape lighting.
-    vColor = mix(uColor * frontLight, aColor, uOriginalColor);
+    // Keep original RGB independent of the hidden uniform colour. A mix at
+    // exactly 1 can still leave an HDR rounding difference after colour edits.
+    vColor = uOriginalColor > 0.5 ? aColor : uColor * frontLight;
+    if (uSurfaceMode > 0.5) {
+      vec3 viewNormal = normalize(normalMatrix * normal);
+      float surfaceLight = 0.32 + 0.68 * pow(abs(dot(viewNormal, normalize(vec3(-0.35, 0.6, 1.0)))), 1.45);
+      vColor *= surfaceLight;
+    }
+    #ifdef TRAIL
+      if (petalActive) vColor = mix(vColor, mix(uColor, aColor, uOriginalColor), 0.7);
+    #endif
     vShimmer = 0.82 + 0.18 * aSeed.z;
     vSpark = step(1.0 - uSparkle * 0.035, aSeed.z);
     vVisibility = visibility;
     vTrailAlpha = smoothstep(0.005, 0.18, uProgress) *
                   pow(max(0.0, 1.0 - history), 1.15) * uTrail *
                   mix(0.28, 1.0, step(0.8, aSeed.z));
+    if (petalActive) {
+      vTrailAlpha = smoothstep(0.03, 0.2, vLocalAge) *
+        pow(max(0.0, 1.0 - history), 1.1) * uTrail * (0.48 + aSeed.z * 0.52);
+    }
     vec4 viewPosition = modelViewMatrix * vec4(displaced, 1.0);
     gl_Position = projectionMatrix * viewPosition;
     float perspectiveSize = clamp(5.7 / max(0.25, -viewPosition.z), 0.28, 5.0);
     vDistanceFade = clamp(sqrt(perspectiveSize), 0.4, 1.2) * uDensityOpacity;
     gl_PointSize = max(1.0, uSize * perspectiveSize * mix(0.9, 1.55, vSpark) * (1.0 + uGlow * 0.3));
+    if (uSurfaceMode > 0.5) gl_PointSize = max(0.85, uSize * perspectiveSize * (0.92 + aSeed.z * 0.13) * mix(1.0, 1.14, vSpark));
+    #ifdef AMBIENT
+      gl_PointSize = max(0.9, uSize * perspectiveSize * (0.55 + aSeed.z * 0.45));
+    #endif
+    gl_PointSize *= max(1.0, uOutputScale);
   }
 `;
 
@@ -190,18 +317,24 @@ export const particleFragmentShader = /* glsl */ `
   uniform float uGlow;
   uniform float uFade;
   uniform float uProgress;
+  uniform float uSurfaceMode;
+  uniform float uPetalFlow;
+  uniform float uMode;
+  uniform float uOriginalColor;
   varying vec3 vColor;
   varying float vShimmer;
   varying float vVisibility;
   varying float vTrailAlpha;
   varying float vSpark;
   varying float vDistanceFade;
+  varying float vLocalAge;
 
   void main() {
-    float dissolve = mix(1.0, 1.0 - smoothstep(0.78, 1.0, uProgress), uFade);
+    float petalWeight = uPetalFlow * step(4.5, uMode);
+    float dissolve = mix(1.0, 1.0 - smoothstep(mix(0.78, 0.88, petalWeight), 1.0, uProgress), uFade);
     float alpha;
     #ifdef TRAIL
-      alpha = vTrailAlpha * uOpacity * dissolve * vVisibility * 0.42;
+      alpha = vTrailAlpha * uOpacity * dissolve * mix(vVisibility, 1.0, petalWeight) * mix(0.42, 0.6, petalWeight);
     #else
       float radius = length(gl_PointCoord - vec2(0.5)) * 2.0;
       if (radius > 1.0) discard;
@@ -209,11 +342,30 @@ export const particleFragmentShader = /* glsl */ `
       float halo = pow(max(0.0, 1.0 - radius), 3.0) * uGlow * 0.08;
       float edge = 1.0 - smoothstep(0.87, 1.0, radius);
       alpha = (core * 0.61 + halo) * edge * uOpacity * vShimmer * dissolve * vVisibility;
+      if (uSurfaceMode > 0.5) {
+        alpha = (1.0 - smoothstep(0.52, 0.99, radius)) * uOpacity * dissolve * vVisibility;
+        #ifndef AMBIENT
+          alpha *= 1.0 - smoothstep(0.45, 0.91, uProgress) * petalWeight * 0.85;
+          if (alpha < 0.075) discard;
+        #endif
+      }
     #endif
     if (alpha < 0.001) discard;
-    alpha *= vDistanceFade;
+    alpha *= mix(vDistanceFade, clamp(vDistanceFade / max(0.22, vDistanceFade), 0.65, 1.0), uSurfaceMode);
     // Emit unclamped linear HDR; the final OutputPass alone performs tone
     // mapping and sRGB encoding after the real bloom convolution.
-    gl_FragColor = vec4(vColor * (1.1 + vSpark * 8.0), alpha);
+    float energy = mix(1.1 + vSpark * 8.0, 1.08 + vSpark * 1.4, uSurfaceMode);
+    #ifdef TRAIL
+      if (petalWeight > 0.5) energy = 4.8;
+    #else
+      #ifndef AMBIENT
+        if (uSurfaceMode > 0.5 && uOriginalColor > 0.5) energy = 1.22 + vSpark * 1.4;
+      #endif
+    #endif
+    #ifdef AMBIENT
+      energy = 1.25 + vSpark * 1.0;
+      alpha *= 0.65;
+    #endif
+    gl_FragColor = vec4(vColor * energy, alpha);
   }
 `;

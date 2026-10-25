@@ -17,6 +17,7 @@ function createEnvironment() {
     Object.defineProperty(target, name, { configurable: true, writable: true, value });
   };
   const environment = {
+    replace,
     now: 0,
     timerId: 0,
     timeouts: new Map(),
@@ -130,9 +131,10 @@ function createEnvironment() {
     width: 1280,
     height: 720,
     captureStream(frameRate) {
-      assert.equal(frameRate, 30);
+      assert.equal(frameRate, environment.manualCapture ? 0 : 30);
       if (environment.captureFailure) throw environment.captureFailure;
       const track = { stopped: false, stop() { this.stopped = true; } };
+      if (environment.manualCapture) track.requestFrame = () => { environment.frameRequests = (environment.frameRequests || 0) + 1; };
       const stream = { track, getVideoTracks: () => [track], getTracks: () => [track] };
       environment.streams.push(stream);
       return stream;
@@ -154,6 +156,36 @@ function recorderTest(name, run) {
 }
 
 describe('CanvasRecorder 状态与资源回归', { concurrency: false }, () => {
+  recorderTest('manual frame requests follow effective time, pause excludes requests, and teardown clears the pump', (env) => {
+    env.manualCapture = true;
+    env.replace(globalThis, 'CanvasCaptureMediaStreamTrack', { prototype: { requestFrame() {} } });
+    const recorder = env.createRecorder(); recorder.start();
+    const encoder = env.encoders.at(-1);
+    assert.equal(env.frameRequests, 1);
+    env.advance(34, true); assert.equal(env.frameRequests, 2);
+    recorder.pause(); const requests = env.frameRequests;
+    env.advance(5000, true); assert.equal(env.frameRequests, requests);
+    recorder.resume(); env.advance(34, true); assert.equal(env.frameRequests, requests + 1);
+    recorder.stop(); encoder.finish();
+    assert.equal(recorder.state.result.captureMode, 'manual');
+    assert.equal(recorder.state.result.requestedFrames, 3);
+    assert.equal(recorder.state.result.duration, .068);
+    assert.equal(env.intervals.size, 0); assert.equal(env.timeouts.size, 0);
+    assert.ok(env.streams.every(stream => stream.track.stopped)); recorder.destroy();
+  });
+  recorderTest('1080p captures actual dimensions and uses explicit higher encoding bitrate', (env) => {
+    env.canvas.width = 1920; env.canvas.height = 1080;
+    const recorder = env.createRecorder(); recorder.start('high');
+    const encoder = env.encoders.at(-1);
+    assert.equal(encoder.options.videoBitsPerSecond, 24_000_000);
+    env.advance(11_000); recorder.stop(); encoder.finish();
+    assert.equal(recorder.state.result.width, 1920); assert.equal(recorder.state.result.height, 1080);
+    assert.equal(recorder.state.result.duration, 11);
+    recorder.start('standard');
+    assert.equal(env.encoders.at(-1).options.videoBitsPerSecond, 12_000_000);
+    recorder.destroy(); assert.ok(env.streams.every(stream => stream.track.stopped));
+  });
+
   recorderTest('按真实能力优先 MP4，回退 WebM，画质及上海时间文件名正确', (env) => {
     env.supportedTypes.add('video/mp4');
     const recorder = env.createRecorder();

@@ -1,0 +1,105 @@
+<!doctype html>
+<html lang="zh-CN"><meta charset="utf-8"><title>花瓣短细丝 GPU 回归</title>
+<style>body{background:#101118;color:#d7dcf5;font:15px/1.6 monospace;padding:24px}pre{white-space:pre-wrap}</style>
+<h1>花瓣短细丝 GPU 回归</h1><p>实际生产 vertex 与 fragment；读取细丝逐顶点坐标，完成后释放 WebGL 上下文。</p><pre id="result">运行中…</pre>
+<script type="module">
+import { particleVertexShader, particleFragmentShader } from '/src/shaders.ts';
+const report={status:'running',checks:[],metrics:{}};
+let gl;
+try {
+  gl=document.createElement('canvas').getContext('webgl2');
+  if(!gl)throw Error('浏览器没有提供 WebGL 2。');
+  const anchors=12,steps=24,stride=steps+1,count=anchors*stride;
+  const origins=new Float32Array(count*3),histories=new Float32Array(count*3),normals=new Float32Array(count*3);
+  const surfaces=new Float32Array(count*3),seeds=new Float32Array(count*3),colours=new Float32Array(count*3);
+  for(let anchor=0;anchor<anchors;anchor++)for(let step=0;step<=steps;step++){
+    const offset=(anchor*stride+step)*3,angle=anchor/anchors*Math.PI*2;
+    origins.set([Math.cos(angle)*.72,Math.sin(angle)*.62,Math.sin(angle*2)*.08],offset);
+    histories[offset]=step/steps;
+    normals.set([.1*Math.cos(angle),.1*Math.sin(angle),1],offset);
+    surfaces.set([anchor/anchors,.7,anchor<8?0:1],offset);
+    seeds.set([.11+anchor*.061,.08+anchor*.073,.06+anchor*.079],offset);
+    colours.set(anchor<8?[.8,.09,.3]:[.85,.5,.025],offset);
+  }
+  function compile(type,source){
+    const shader=gl.createShader(type);gl.shaderSource(shader,source);gl.compileShader(shader);
+    if(!gl.getShaderParameter(shader,gl.COMPILE_STATUS))throw Error(gl.getShaderInfoLog(shader));return shader;
+  }
+  const programs=[];
+  function makeProgram(trail,withoutCoil=false){
+    let production=particleVertexShader;
+    if(withoutCoil)production=production.replace('float coilRadius =','float coilRadius = 0.0 *');
+    const prefix='#version 300 es\nprecision highp float;\n'+(trail?'#define TRAIL 1\n':'');
+    const vertex=prefix+'in vec3 position;\nuniform mat4 modelViewMatrix;\nuniform mat4 projectionMatrix;\nuniform mat3 normalMatrix;\nout vec3 testedPosition;\n'+
+      production.replaceAll('attribute ','in ').replaceAll('varying ','out ').replaceAll('texture2D(', 'texture(')
+        .replace('vec4 viewPosition =','testedPosition = displaced;\n vec4 viewPosition =');
+    const fragment=prefix+'out vec4 finalColour;\n'+particleFragmentShader.replaceAll('varying ','in ').replaceAll('gl_FragColor','finalColour');
+    const program=gl.createProgram();gl.attachShader(program,compile(gl.VERTEX_SHADER,vertex));gl.attachShader(program,compile(gl.FRAGMENT_SHADER,fragment));
+    gl.transformFeedbackVaryings(program,['testedPosition'],gl.INTERLEAVED_ATTRIBS);gl.linkProgram(program);
+    if(!gl.getProgramParameter(program,gl.LINK_STATUS))throw Error(gl.getProgramInfoLog(program));
+    const vao=gl.createVertexArray();gl.bindVertexArray(vao);
+    for(const[name,data]of[['position',trail?histories:origins],['aOrigin',origins],['aSeed',seeds],['aColor',colours],['aNormal',normals],['aSurface',surfaces]]){
+      const location=gl.getAttribLocation(program,name);if(location<0)continue;
+      const buffer=gl.createBuffer();gl.bindBuffer(gl.ARRAY_BUFFER,buffer);gl.bufferData(gl.ARRAY_BUFFER,data,gl.STATIC_DRAW);
+      gl.enableVertexAttribArray(location);gl.vertexAttribPointer(location,3,gl.FLOAT,false,0,0);
+    }
+    const item={program,vao};programs.push(item);return item;
+  }
+  const pointProgram=makeProgram(false),trailProgram=makeProgram(true),baseProgram=makeProgram(true,true);
+  const texture=gl.createTexture();gl.activeTexture(gl.TEXTURE0);gl.bindTexture(gl.TEXTURE_2D,texture);
+  gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,1025,1,0,gl.RGBA,gl.UNSIGNED_BYTE,new Uint8Array(1025*4));
+  gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MIN_FILTER,gl.NEAREST);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MAG_FILTER,gl.NEAREST);
+  gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_S,gl.CLAMP_TO_EDGE);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_T,gl.CLAMP_TO_EDGE);
+  const feedback=gl.createTransformFeedback(),output=gl.createBuffer();
+  gl.bindTransformFeedback(gl.TRANSFORM_FEEDBACK,feedback);gl.bindBuffer(gl.TRANSFORM_FEEDBACK_BUFFER,output);
+  gl.bufferData(gl.TRANSFORM_FEEDBACK_BUFFER,origins.byteLength,gl.DYNAMIC_READ);gl.bindBufferBase(gl.TRANSFORM_FEEDBACK_BUFFER,0,output);
+  const identity4=new Float32Array([1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1]),identity3=new Float32Array([1,0,0,0,1,0,0,0,1]);
+  const defaults={uMode:5,uPetalFlow:1,uSurfaceMode:1,uProgress:.72,uTime:2,uDepth:1.2,uScatter:.2,uStagger:.35,uIsImage:0,
+    uSpread:.6,uTurbulence:.12,uFlowScale:1.4,uStringiness:1,uErosion:.7,uWaveRhythm:1,uAxis:1,uCurl:1.6,uSparkle:.06,
+    uDensityOpacity:1,uSize:1,uOutputScale:1,uTrail:.55,uTimelineActive:0,uTrailTimeSpan:.3,uTrailProgressSpan:.12,
+    uOpacity:.9,uGlow:.32,uFade:1,uOriginalColor:1,uTimelineDuration:36,uMotionSpeed:1};
+  function sample(item,parameters={}){
+    gl.useProgram(item.program);gl.bindVertexArray(item.vao);
+    for(const[name,value]of Object.entries({...defaults,...parameters}))gl.uniform1f(gl.getUniformLocation(item.program,name),value);
+    gl.uniform1i(gl.getUniformLocation(item.program,'uProgressHistory'),0);
+    gl.uniform3f(gl.getUniformLocation(item.program,'uDirection'),1,0,0);gl.uniform3f(gl.getUniformLocation(item.program,'uColor'),.8,.09,.3);
+    gl.uniformMatrix4fv(gl.getUniformLocation(item.program,'modelViewMatrix'),false,identity4);
+    gl.uniformMatrix4fv(gl.getUniformLocation(item.program,'projectionMatrix'),false,identity4);
+    gl.uniformMatrix3fv(gl.getUniformLocation(item.program,'normalMatrix'),false,identity3);
+    gl.enable(gl.RASTERIZER_DISCARD);gl.beginTransformFeedback(gl.POINTS);gl.drawArrays(gl.POINTS,0,count);gl.endTransformFeedback();gl.disable(gl.RASTERIZER_DISCARD);
+    const values=new Float32Array(origins.length);gl.getBufferSubData(gl.TRANSFORM_FEEDBACK_BUFFER,0,values);
+    const error=gl.getError();if(error!==gl.NO_ERROR)throw Error('WebGL error '+error);return values;
+  }
+  function check(name,passed){report.checks.push({name,passed:!!passed});if(!passed)throw Error(name);}
+  const exact=(a,b)=>a.every((value,index)=>value===b[index]);
+  const distance=(a,b,ia,ib)=>Math.hypot(a[ia]-b[ib],a[ia+1]-b[ib+1],a[ia+2]-b[ib+2]);
+  const points=sample(pointProgram),curves=sample(trailProgram),base=sample(baseProgram);
+  check('实际生产 points 与 TRAIL vertex/fragment 编译及链接成功',true);
+  check('所有短细丝顶点均为有限数值',curves.every(Number.isFinite));
+  check('history=0 精确连接真实主体粒子头部',Array.from({length:anchors},(_,i)=>i*stride*3).every(i=>distance(points,curves,i,i)===0));
+  check('p=0 全部细丝顶点精确回到各自原点',exact(sample(trailProgram,{uProgress:0}),origins));
+  let maxHeadDistance=0,maxCoilOffset=0,curved=0;
+  for(let anchor=0;anchor<anchors;anchor++){
+    const head=anchor*stride*3,tail=head+steps*3;
+    const dx=curves[tail]-curves[head],dy=curves[tail+1]-curves[head+1],dz=curves[tail+2]-curves[head+2];
+    const length=Math.max(1e-8,Math.hypot(dx,dy,dz));let deviation=0;
+    for(let step=0;step<=steps;step++){
+      const i=head+step*3,x=curves[i]-curves[head],y=curves[i+1]-curves[head+1],z=curves[i+2]-curves[head+2];
+      deviation=Math.max(deviation,Math.hypot(y*dz-z*dy,z*dx-x*dz,x*dy-y*dx)/length);
+      maxHeadDistance=Math.max(maxHeadDistance,distance(curves,curves,i,head));
+      maxCoilOffset=Math.max(maxCoilOffset,distance(curves,base,i,i));
+    }
+    if(deviation>.008)curved++;
+  }
+  report.metrics={maxHeadDistance,maxCoilOffset,nonCollinearCurves:curved,anchors,segments:steps};
+  check('至少半数曲线有可测的弯曲，未退化为直线',curved>=anchors/2);
+  check('细丝保持局部范围，不形成跨画面长线',maxHeadDistance<.45);
+  check('coil实际改变顶点且保持局部小半径',maxCoilOffset>.01&&maxCoilOffset<.16);
+  sample(trailProgram,{uProgress:1,uTime:30});sample(trailProgram,{uProgress:.1,uTime:0});
+  check('同时间同进度重复求值完全一致',exact(sample(trailProgram),curves));
+  check('coil不影响旧wave模式的逐顶点轨迹',exact(sample(trailProgram,{uMode:4,uPetalFlow:1}),sample(trailProgram,{uMode:4,uPetalFlow:0})));
+  report.status='passed';report.total=report.checks.length;
+}catch(error){report.status='failed';report.error=String(error.stack||error);}
+finally{gl?.getExtension('WEBGL_lose_context')?.loseContext();}
+document.querySelector('#result').textContent=JSON.stringify(report,null,2);document.documentElement.dataset.status=report.status;
+</script></html>

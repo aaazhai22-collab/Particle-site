@@ -7,6 +7,8 @@ export interface RecordingResult {
   mimeType: string;
   extension: string;
   filename: string;
+  captureMode: 'manual' | 'automatic';
+  requestedFrames: number;
 }
 
 export type RecordingStatus = 'idle' | 'recording' | 'paused' | 'processing' | 'ready' | 'error';
@@ -19,8 +21,7 @@ export interface RecorderState {
   error: string | null;
 }
 
-const WIDTH = 1280;
-const HEIGHT = 720;
+const OUTPUT_SIZES = [[1280, 720], [1920, 1080]] as const;
 const TARGET_FPS = 30;
 const MAX_DURATION_MS = 120_000;
 const MAX_BYTES = 200 * 1024 * 1024;
@@ -77,7 +78,7 @@ function readableError(error: unknown): string {
 }
 
 /**
- * 录制提供的最终渲染画布。画布在录制期间须保持 1280 × 720；
+ * 录制提供的最终渲染画布。开始时固定实际的 720p / 1080p 像素尺寸；
  * CSS 显示尺寸和浏览器窗口尺寸可以变化。
  */
 export class CanvasRecorder {
@@ -95,13 +96,18 @@ export class CanvasRecorder {
   private chunks: Blob[] = [];
   private heartbeat: number | null = null;
   private deadline: number | null = null;
+  private framePump: number | null = null;
+  private manualTrack: CanvasCaptureMediaStreamTrack | null = null;
+  private manualCapture = false;
+  private frameSlot = -1;
+  private requestedFrames = 0;
   private accumulatedMs = 0;
   private activeStartedAt: number | null = null;
   private recordingDate = new Date();
   private projectName = 'Sphere';
   private recordingProjectName = 'Sphere';
-  private outputWidth = WIDTH;
-  private outputHeight = HEIGHT;
+  private outputWidth = 1280;
+  private outputHeight = 720;
   private runId = 0;
   private destroyed = false;
   private pauseHookActive = false;
@@ -143,21 +149,24 @@ export class CanvasRecorder {
       this.patch({ status: 'error', error: '当前浏览器不支持画布视频录制，请使用最新版 Chrome 或 Edge。' });
       return;
     }
-    if (this.canvas.width !== WIDTH || this.canvas.height !== HEIGHT) {
-      this.patch({ status: 'error', error: '录制需要 1280 × 720 的画布输出，请先恢复 720p 画面后重试。' });
+    if (!OUTPUT_SIZES.some(([width, height]) => this.canvas.width === width && this.canvas.height === height)) {
+      this.patch({ status: 'error', error: '录制需要 1280 × 720 或 1920 × 1080 的画布输出，请先选择输出分辨率。' });
       return;
     }
 
     const runId = ++this.runId;
     try {
-      this.stream = this.canvas.captureStream(TARGET_FPS);
+      this.manualCapture = typeof CanvasCaptureMediaStreamTrack !== 'undefined' &&
+        typeof CanvasCaptureMediaStreamTrack.prototype.requestFrame === 'function';
+      this.stream = this.canvas.captureStream(this.manualCapture ? 0 : TARGET_FPS);
       if (this.stream.getVideoTracks().length === 0) throw new DOMException('No video track', 'NotSupportedError');
+      this.manualTrack = this.manualCapture ? this.stream.getVideoTracks()[0] as CanvasCaptureMediaStreamTrack : null;
       // 某些浏览器虽然通过能力检测，构造指定编码器时仍可能失败。
       for (const mimeType of availableMimeTypes()) {
         try {
           this.recorder = new MediaRecorder(this.stream, {
             mimeType,
-            videoBitsPerSecond: quality === 'high' ? 12_000_000 : 6_000_000,
+            videoBitsPerSecond: (quality === 'high' ? 12_000_000 : 6_000_000) * (this.canvas.height === 1080 ? 2 : 1),
           });
           this.selectedMimeType = this.recorder.mimeType || mimeType;
           break;
@@ -281,6 +290,9 @@ export class CanvasRecorder {
     this.chunks = [];
     this.accumulatedMs = 0;
     this.activeStartedAt = null;
+    this.frameSlot = -1;
+    this.requestedFrames = 0;
+    this.manualCapture = false;
     this.currentState = { status: 'idle', elapsed: 0, bytes: 0, result: null, error: null };
     this.emit();
   }
@@ -303,6 +315,20 @@ export class CanvasRecorder {
 
   private armTimers(): void {
     this.clearTimers();
+    if (this.manualTrack) {
+      // Select real frames on an elapsed-time clock, avoiding automatic
+      // captureStream cadence aliasing against a non-60-Hz render loop.
+      const request = () => {
+        if (this.currentState.status !== 'recording' || !this.manualTrack) return;
+        const slot = Math.floor(this.elapsedMs() * TARGET_FPS / 1000);
+        if (slot <= this.frameSlot) return;
+        this.frameSlot = slot;
+        try { this.manualTrack.requestFrame(); this.requestedFrames++; }
+        catch (error) { this.patch({ error: readableError(error) }); this.stop(); }
+      };
+      request();
+      if (this.currentState.status === 'recording') this.framePump = window.setInterval(request, 1000 / (TARGET_FPS * 2));
+    }
     this.heartbeat = window.setInterval(() => {
       if (this.currentState.status !== 'recording') return;
       this.patch({ elapsed: this.elapsedMs() / 1000 });
@@ -312,6 +338,8 @@ export class CanvasRecorder {
   }
 
   private clearTimers(): void {
+    if (this.framePump !== null) window.clearInterval(this.framePump);
+    this.framePump = null;
     if (this.heartbeat !== null) window.clearInterval(this.heartbeat);
     if (this.deadline !== null) window.clearTimeout(this.deadline);
     this.heartbeat = null;
@@ -343,6 +371,8 @@ export class CanvasRecorder {
         mimeType: actualMime,
         extension,
         filename: recordingFilename(this.recordingDate, extension, this.recordingProjectName),
+        captureMode: this.manualCapture ? 'manual' : 'automatic',
+        requestedFrames: this.requestedFrames,
       };
       this.currentState.result = result;
       this.currentState.bytes = blob.size;
@@ -368,6 +398,7 @@ export class CanvasRecorder {
     }
     this.stream?.getTracks().forEach((track) => track.stop());
     this.stream = null;
+    this.manualTrack = null;
   }
 
   private revokeResult(): void {
