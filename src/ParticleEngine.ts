@@ -100,12 +100,15 @@ export class ParticleEngine {
   private readonly object = new THREE.Group();
   private geometry: THREE.BufferGeometry;
   private trailGeometry: THREE.InstancedBufferGeometry;
+  private particleTrailGeometry: THREE.InstancedBufferGeometry;
   private ambientGeometry: THREE.BufferGeometry;
   private readonly points: THREE.Points;
   private readonly trails: THREE.LineSegments;
+  private readonly particleTrails: THREE.Points;
   private readonly ambientPoints: THREE.Points;
   private readonly material: THREE.ShaderMaterial;
   private readonly trailMaterial: THREE.ShaderMaterial;
+  private readonly particleTrailMaterial: THREE.ShaderMaterial;
   private readonly ambientMaterial: THREE.ShaderMaterial;
   private readonly postProcessing: ParticlePostProcessing;
   private readonly resizeObserver: ResizeObserver;
@@ -142,6 +145,7 @@ export class ParticleEngine {
   private adaptiveWarmupPending = true;
   private adaptiveWarmupReason = '图形首次编译预热，暂不判断设备性能';
   private renderedTrails = false;
+  private renderedParticleTrails = false;
   private renderedBloom = false;
   private pageHidden = typeof document !== 'undefined' && document.hidden;
 
@@ -196,6 +200,7 @@ export class ParticleEngine {
     this.asset = createSphereAsset();
     this.geometry = this.createGeometry(this.asset);
     this.trailGeometry = this.createTrailGeometry(this.asset, this.geometry);
+    this.particleTrailGeometry = this.createParticleTrailGeometry(this.trailGeometry);
     this.ambientGeometry = this.createAmbientGeometry(this.asset, this.geometry);
     this.rebuildProgressLookup();
     const uniforms = {
@@ -226,20 +231,27 @@ export class ParticleEngine {
       uniforms, defines: { TRAIL: 1 }, vertexShader: particleVertexShader, fragmentShader: particleFragmentShader,
       transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, toneMapped: false,
     });
+    this.particleTrailMaterial = new THREE.ShaderMaterial({
+      uniforms, defines: { TRAIL: 1, PARTICLE_TRAIL: 1 }, vertexShader: particleVertexShader, fragmentShader: particleFragmentShader,
+      transparent: true, depthWrite: false, depthTest: true, blending: THREE.AdditiveBlending, toneMapped: false,
+    });
     this.ambientMaterial = new THREE.ShaderMaterial({
       uniforms, defines: { AMBIENT: 1 }, vertexShader: particleVertexShader, fragmentShader: particleFragmentShader,
       transparent: true, depthWrite: false, depthTest: true, blending: THREE.AdditiveBlending, toneMapped: false,
     });
     this.points = new THREE.Points(this.geometry, this.material);
     this.trails = new THREE.LineSegments(this.trailGeometry, this.trailMaterial);
+    this.particleTrails = new THREE.Points(this.particleTrailGeometry, this.particleTrailMaterial);
     this.ambientPoints = new THREE.Points(this.ambientGeometry, this.ambientMaterial);
     this.points.frustumCulled = false;
     this.trails.frustumCulled = false;
+    this.particleTrails.frustumCulled = false;
     this.ambientPoints.frustumCulled = false;
     this.points.renderOrder = 0;
     this.trails.renderOrder = 1;
+    this.particleTrails.renderOrder = 1;
     this.ambientPoints.renderOrder = 2;
-    this.object.add(this.points, this.trails, this.ambientPoints);
+    this.object.add(this.points, this.trails, this.particleTrails, this.ambientPoints);
     this.scene.add(this.object);
     this.postProcessing = new ParticlePostProcessing(this.renderer, this.scene, this.camera);
     this.postProcessing.configure(this.values.glow, this.values.exposure, this.values.contrast, this.values.surfaceMode);
@@ -278,19 +290,24 @@ export class ParticleEngine {
     const geometry = this.createGeometry(asset);
     let trailGeometry: THREE.InstancedBufferGeometry | undefined;
     let ambientGeometry: THREE.BufferGeometry;
+    let particleTrailGeometry: THREE.InstancedBufferGeometry | undefined;
     try {
       trailGeometry = this.createTrailGeometry(asset, geometry);
+      particleTrailGeometry = this.createParticleTrailGeometry(trailGeometry);
       ambientGeometry = this.createAmbientGeometry(asset, geometry);
-    } catch (error) { geometry.dispose(); trailGeometry?.dispose(); throw error; }
+    } catch (error) { geometry.dispose(); trailGeometry?.dispose(); particleTrailGeometry?.dispose(); throw error; }
     const oldGeometry = this.geometry;
     const oldTrailGeometry = this.trailGeometry;
+    const oldParticleTrailGeometry = this.particleTrailGeometry;
     const oldAmbientGeometry = this.ambientGeometry;
     this.asset = asset;
     this.geometry = geometry;
     this.trailGeometry = trailGeometry;
+    this.particleTrailGeometry = particleTrailGeometry;
     this.ambientGeometry = ambientGeometry;
     this.points.geometry = geometry;
     this.trails.geometry = trailGeometry;
+    this.particleTrails.geometry = particleTrailGeometry;
     this.ambientPoints.geometry = ambientGeometry;
     this.updateTrailPath();
     this.synchronizeAdaptive(true);
@@ -298,6 +315,7 @@ export class ParticleEngine {
     this.syncUniforms();
     oldGeometry.dispose();
     oldTrailGeometry.dispose();
+    oldParticleTrailGeometry.dispose();
     oldAmbientGeometry.dispose();
     this.emit();
   }
@@ -546,9 +564,11 @@ export class ParticleEngine {
     document.removeEventListener('visibilitychange', this.visibilityChange);
     this.geometry.dispose();
     this.trailGeometry.dispose();
+    this.particleTrailGeometry.dispose();
     this.ambientGeometry.dispose();
     this.material.dispose();
     this.trailMaterial.dispose();
+    this.particleTrailMaterial.dispose();
     this.ambientMaterial.dispose();
     this.progressTexture?.dispose();
     this.postProcessing.dispose();
@@ -618,6 +638,20 @@ export class ParticleEngine {
     return geometry;
   }
 
+  /** Unique samples of the same particle's path, drawn as grains rather than loops. */
+  private createParticleTrailGeometry(source: THREE.InstancedBufferGeometry): THREE.InstancedBufferGeometry {
+    const geometry = new THREE.InstancedBufferGeometry();
+    const path = new Float32Array(25 * 3);
+    for (let i = 0; i < 25; i++) path[i * 3] = i / 24;
+    geometry.setAttribute('position', new THREE.BufferAttribute(path, 3));
+    for (const name of ['aOrigin', 'aSeed', 'aColor', 'aNormal', 'aSurface']) {
+      const attribute = source.getAttribute(name);
+      geometry.setAttribute(name, new THREE.InstancedBufferAttribute(attribute.array, 3));
+    }
+    geometry.instanceCount = 0;
+    return geometry;
+  }
+
   private updateTrailPath(): void {
     const segments = this.isPetalFlowActive() ? 24 : 3;
     const path = new Float32Array(segments * 6);
@@ -638,6 +672,7 @@ export class ParticleEngine {
     this.current.filamentCount = petalActive ? layers.filaments : 0;
     this.ambientGeometry.setDrawRange(0, layers.ambient);
     this.trailGeometry.instanceCount = petalActive ? layers.filaments : Math.min(this.current.actualCount, this.trailBudget());
+    this.particleTrailGeometry.instanceCount = petalActive ? layers.filaments : 0;
   }
 
   private isPetalFlowActive(): boolean { return this.values.petalFlow && this.effect === 'erosion'; }
@@ -851,15 +886,18 @@ export class ParticleEngine {
     u.uTrailTimeSpan.value = span * this.values.motionSpeed;
     u.uTrailProgressSpan.value = this.values.trail * 0.22;
     this.trails.visible = this.values.trail > 0 && this.current.progress > 0.00001 && this.trailGeometry.instanceCount > 0;
+    this.particleTrails.visible = this.isPetalFlowActive() && this.values.trail > 0 && this.current.progress > 0.65 && this.particleTrailGeometry.instanceCount > 0;
     this.points.visible = !(this.values.fade && this.current.progress >= 1);
     this.trails.visible &&= this.points.visible;
+    this.particleTrails.visible &&= this.points.visible;
     this.ambientPoints.visible = this.current.ambientCount > 0 && this.points.visible;
-    if ((this.trails.visible && !this.renderedTrails) || (this.values.glow > 0 && !this.renderedBloom)) {
+    if ((this.trails.visible && !this.renderedTrails) || (this.particleTrails.visible && !this.renderedParticleTrails) || (this.values.glow > 0 && !this.renderedBloom)) {
       this.requestAdaptiveWarmup('图形新通道预热，暂不判断设备性能');
     }
     u.uDensityOpacity.value = clamp(Math.pow(DEFAULT_PARTICLE_COUNT / Math.max(1, this.current.actualCount), 0.35), 0.22, 1.35);
     this.postProcessing.render();
     this.renderedTrails ||= this.trails.visible;
+    this.renderedParticleTrails ||= this.particleTrails.visible;
     this.renderedBloom ||= this.values.glow > 0;
     this.needsRendering = false;
   }

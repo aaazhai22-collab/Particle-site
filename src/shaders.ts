@@ -41,6 +41,7 @@ export const particleVertexShader = /* glsl */ `
   uniform float uTimelineDuration;
   uniform float uMotionSpeed;
   uniform float uOutputScale;
+  uniform float uFade;
   uniform sampler2D uProgressHistory;
   varying vec3 vColor;
   varying float vShimmer;
@@ -49,6 +50,8 @@ export const particleVertexShader = /* glsl */ `
   varying float vSpark;
   varying float vDistanceFade;
   varying float vLocalAge;
+  varying vec3 vSeed;
+  varying float vHistory;
 
   vec3 flow(vec3 p, float t) {
     return vec3(
@@ -249,10 +252,19 @@ export const particleVertexShader = /* glsl */ `
       vLocalAge = petalAge(original, uProgress);
       float sampledAge = vLocalAge;
       #ifdef TRAIL
-        sampledAge = max(0.0, sampledAge - history * (0.025 + uTrail * 0.085));
+        #ifdef PARTICLE_TRAIL
+          // Sample the actual particle trajectory. No extra circular geometry.
+          float endingProgress = mix(min(uProgress, 0.94), uProgress, uFade);
+          float shrink = mix(1.0, 0.25, smoothstep(0.8, 0.985, endingProgress));
+          sampledAge = max(0.0, sampledAge - history * (0.05 + uTrail * 0.35) * shrink);
+          t = max(0.0, t - history * uTrail * 0.45 * uMotionSpeed * shrink);
+        #else
+          sampledAge = max(0.0, sampledAge - history * (0.025 + uTrail * 0.085));
+        #endif
       #endif
       displaced = petalPosition(original, sampledAge, t);
       #ifdef TRAIL
+        #ifndef PARTICLE_TRAIL
         vec3 coilNormal = surfaceNormal(original);
         vec3 coilGuide = curlVelocity(original * uFlowScale, 0.0) + uDirection * 0.6;
         vec3 coilTangent = normalize(coilGuide - coilNormal * dot(coilGuide, coilNormal) * 0.85 + vec3(0.0001));
@@ -265,6 +277,7 @@ export const particleVertexShader = /* glsl */ `
         // The coil is local geometry, not a feedback image or accumulated path.
         displaced += coilRadius * (coilTangent * (sin(coilPhase + coilAngle) - sin(coilPhase)) +
                                    coilSide * (cos(coilPhase + coilAngle) - cos(coilPhase)));
+        #endif
       #endif
       visibility = 1.0 - smoothstep(0.28, 0.98, vLocalAge) * 0.86;
     } else displaced = displace(original, p, t, visibility);
@@ -292,6 +305,8 @@ export const particleVertexShader = /* glsl */ `
     vShimmer = 0.82 + 0.18 * aSeed.z;
     vSpark = step(1.0 - uSparkle * 0.035, aSeed.z);
     vVisibility = visibility;
+    vSeed = aSeed;
+    vHistory = history;
     vTrailAlpha = smoothstep(0.005, 0.18, uProgress) *
                   pow(max(0.0, 1.0 - history), 1.15) * uTrail *
                   mix(0.28, 1.0, step(0.8, aSeed.z));
@@ -307,6 +322,9 @@ export const particleVertexShader = /* glsl */ `
     if (uSurfaceMode > 0.5) gl_PointSize = max(0.85, uSize * perspectiveSize * (0.92 + aSeed.z * 0.13) * mix(1.0, 1.14, vSpark));
     #ifdef AMBIENT
       gl_PointSize = max(0.9, uSize * perspectiveSize * (0.55 + aSeed.z * 0.45));
+    #endif
+    #ifdef PARTICLE_TRAIL
+      gl_PointSize = max(0.9, uSize * perspectiveSize * (0.65 + aSeed.z * 0.4));
     #endif
     gl_PointSize *= max(1.0, uOutputScale);
   }
@@ -328,13 +346,34 @@ export const particleFragmentShader = /* glsl */ `
   varying float vSpark;
   varying float vDistanceFade;
   varying float vLocalAge;
+  varying vec3 vSeed;
+  varying float vHistory;
 
   void main() {
     float petalWeight = uPetalFlow * step(4.5, uMode);
     float dissolve = mix(1.0, 1.0 - smoothstep(mix(0.78, 0.88, petalWeight), 1.0, uProgress), uFade);
     float alpha;
     #ifdef TRAIL
+      #ifdef PARTICLE_TRAIL
+        float radius = length(gl_PointCoord - vec2(0.5)) * 2.0;
+        if (radius > 1.0) discard;
+        float core = 1.0 - smoothstep(0.05, 0.98, radius);
+        float endingProgress = mix(min(uProgress, 0.94), uProgress, uFade);
+        // Each grain has an immutable lifetime; strands break into dots rather
+        // than surviving as a graphic line after the source particles vanish.
+        float grain = fract(sin(vHistory * 79.3 + vSeed.x * 311.7 + vSeed.y * 127.1) * 43758.5453);
+        float death = 0.82 + grain * 0.2;
+        float survival = 1.0 - smoothstep(death - 0.035, death + 0.025, endingProgress);
+        float retain = mix(1.0, 0.18, smoothstep(0.8, 0.985, endingProgress));
+        float shortTail = 1.0 - smoothstep(retain - 0.1, retain + 0.08, vHistory);
+        alpha = core * vTrailAlpha * uOpacity * dissolve * survival * shortTail *
+                smoothstep(0.65, 0.78, uProgress) * 0.8;
+      #else
       alpha = vTrailAlpha * uOpacity * dissolve * mix(vVisibility, 1.0, petalWeight) * mix(0.42, 0.6, petalWeight);
+        // Preserve the approved early/middle frames exactly, and retire their
+        // legacy coil layer only when the particle ending starts.
+        if (petalWeight > 0.5 && uProgress > 0.65) alpha *= 1.0 - smoothstep(0.65, 0.78, uProgress);
+      #endif
     #else
       float radius = length(gl_PointCoord - vec2(0.5)) * 2.0;
       if (radius > 1.0) discard;
@@ -346,7 +385,15 @@ export const particleFragmentShader = /* glsl */ `
         alpha = (1.0 - smoothstep(0.52, 0.99, radius)) * uOpacity * dissolve * vVisibility;
         #ifndef AMBIENT
           alpha *= 1.0 - smoothstep(0.45, 0.91, uProgress) * petalWeight * 0.85;
-          if (alpha < 0.075) discard;
+          if (petalWeight > 0.5 && uProgress > 0.65) {
+            float endingProgress = mix(min(uProgress, 0.94), uProgress, uFade);
+            float death = 0.68 + vSeed.x * 0.3;
+            float survival = 1.0 - smoothstep(death - 0.045, death + 0.035, endingProgress);
+            float grains = (1.0 - smoothstep(0.52, 0.99, radius)) * uOpacity * dissolve *
+                           (0.24 + vSeed.z * 0.18) * survival;
+            alpha = mix(alpha, grains, smoothstep(0.65, 0.88, uProgress));
+            if (alpha < 0.002) discard;
+          } else if (alpha < 0.075) discard;
         #endif
       }
     #endif
@@ -357,6 +404,9 @@ export const particleFragmentShader = /* glsl */ `
     float energy = mix(1.1 + vSpark * 8.0, 1.08 + vSpark * 1.4, uSurfaceMode);
     #ifdef TRAIL
       if (petalWeight > 0.5) energy = 4.8;
+      #ifdef PARTICLE_TRAIL
+        energy = 4.8 + vSpark;
+      #endif
     #else
       #ifndef AMBIENT
         if (uSurfaceMode > 0.5 && uOriginalColor > 0.5) energy = 1.22 + vSpark * 1.4;

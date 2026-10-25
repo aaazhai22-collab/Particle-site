@@ -49,6 +49,7 @@ function editingEngine(options = {}) {
       adaptiveStatus: '', adaptiveCeiling: 30000, frameMsAvg: 0,
     },
     geometry: new THREE.BufferGeometry(), trailGeometry: new THREE.InstancedBufferGeometry(),
+    particleTrailGeometry: new THREE.InstancedBufferGeometry(), particleTrails: {},
     ambientGeometry: new THREE.BufferGeometry(), points: {}, trails: {}, ambientPoints: {}, material: { uniforms },
     renderer: { calls: 0, render() { this.calls++; } },
     controls: Object.assign(new THREE.EventDispatcher(), { update: () => false }),
@@ -64,7 +65,7 @@ function editingEngine(options = {}) {
     needsRendering: true, cameraDirty: false, captureActive: false, trailProgressVelocity: 0,
     activeCount: 30000, adaptive: null, recordingLocked: false,
     adaptiveWarmupPending: true, adaptiveWarmupReason: '图形首次编译预热，暂不判断设备性能',
-    renderedTrails: false, renderedBloom: false, pageHidden: false,
+    renderedTrails: false, renderedParticleTrails: false, renderedBloom: false, pageHidden: false,
     postProcessing: { configure() {}, setSize() {}, render() { engine.renderer.render(); } },
   });
   engine.controlsChange = engine.handleControlsChange.bind(engine);
@@ -251,6 +252,7 @@ test('destroy removes the controls change listener', () => {
     engine.canvas = { removeEventListener() {}, remove() {} };
     engine.material.dispose = () => {};
     engine.trailMaterial = { dispose() {} };
+    engine.particleTrailMaterial = { dispose() {} };
     engine.ambientMaterial = { dispose() {} };
     engine.postProcessing.dispose = () => {};
     engine.renderer.dispose = () => {};
@@ -559,6 +561,45 @@ test('the retained petal preset flag cannot override the other five effect modes
     assert.equal(engine.trailGeometry.getAttribute('position').count, effect === 'erosion' ? 48 : 6);
     assert.equal(engine.state.filamentCount, effect === 'erosion' ? 900 : 0);
   }
+});
+
+test('ending particle paths have 25 unique history samples and retain the existing path budget', () => {
+  const engine = editingEngine({ count: 180000, capacity: 500000 });
+  engine.effect = 'erosion';
+  engine.setAsset(asset(500000));
+  engine.setParams({ surfaceMode: true, petalFlow: true, trail: 0.55 });
+  const positions = engine.particleTrailGeometry.getAttribute('position');
+  const history = Array.from({ length: positions.count }, (_, i) => positions.getX(i));
+  assert.equal(positions.count, 25);
+  assert.equal(new Set(history).size, 25, 'line segment endpoints must not double the particle grain brightness');
+  assert.equal(history[0], 0);
+  assert.equal(history.at(-1), 1);
+  assert.equal(engine.particleTrailGeometry.instanceCount, engine.state.filamentCount);
+  assert.equal(engine.state.filamentCount, 1000);
+  const old = engine.particleTrailGeometry;
+  let disposed = 0;
+  old.addEventListener('dispose', () => disposed++);
+  engine.setAsset(asset(12000));
+  assert.equal(disposed, 1);
+  assert.equal(engine.particleTrails.geometry, engine.particleTrailGeometry);
+});
+
+test('ending particle layer is absent through the exact early boundary and at faded/restored endpoints', () => {
+  const engine = editingEngine();
+  engine.effect = 'erosion';
+  engine.setParams({ surfaceMode: true, petalFlow: true, fade: true, trail: 0.55 });
+  engine.setProgress(0.65); engine.render();
+  assert.equal(engine.particleTrails.visible, false);
+  assert.equal(engine.trails.visible, true);
+  engine.setProgress(0.85); engine.render();
+  assert.equal(engine.particleTrails.visible, true);
+  engine.setProgress(1); engine.render();
+  assert.equal(engine.points.visible, false);
+  assert.equal(engine.particleTrails.visible, false);
+  assert.equal(engine.trails.visible, false);
+  engine.setProgress(0); engine.render();
+  assert.equal(engine.particleTrails.visible, false);
+  assert.equal(engine.trails.visible, false);
 });
 
 test('petal flow respects switching between original and the selected uniform colour', () => {
