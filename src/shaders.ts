@@ -111,32 +111,43 @@ export const particleVertexShader = /* glsl */ `
     return normalize(original + vec3(0.00001));
   }
 
+  vec3 petalDrift(vec3 original) {
+    vec3 outward = normalize(vec3(original.x * 0.8, original.y * 0.22, original.z * 0.35) + vec3(0.0001));
+    vec3 drift = uDirection * 0.4 + vec3(0.0, 0.1, 0.0) + outward * 0.85;
+    drift.z *= uDepth;
+    return normalize(drift + vec3(0.0001, 0.0001, 0.0001 * uDepth));
+  }
+
+  vec3 petalVelocity(vec3 pointOnPath, vec3 drift, float phase) {
+    vec3 velocity = curlVelocity(pointOnPath * uFlowScale, phase) *
+                    (uCurl * (0.16 + uStringiness * 0.035) + uTurbulence * 0.2);
+    velocity.z *= uDepth;
+    velocity += drift * (0.82 + uStringiness * 0.04);
+    // Positive forward velocity opens the streamlines. Curl bends the stream
+    // without prescribing a circular loop or bringing its endpoint home.
+    velocity += drift * max(0.0, 0.58 - dot(velocity, drift));
+    return velocity;
+  }
+
   vec3 petalPosition(vec3 original, float age, float motionPhase) {
     if (age <= 0.0) return original;
-    vec3 n = surfaceNormal(original);
-    vec3 fieldDirection = curlVelocity(original * uFlowScale, 0.0) + uDirection * 0.6;
-    vec3 tangent = fieldDirection - n * dot(fieldDirection, n) * 0.85;
-    tangent = normalize(tangent + vec3(0.0001));
-    vec3 across = normalize(cross(n, tangent) + vec3(0.0001));
-    float bend = age * (2.4 + uCurl * 2.5);
-    // Bounded, locally anchored curls avoid turning the entire flower into a
-    // translated sheet. Spread still changes reach, with a soft spatial limit.
-    float distance = 1.35 * 0.65 * uSpread / (0.65 + uSpread);
-    // A continuous surface map bends neighbouring samples into thin sheets.
-    // Its analytic curve can be addressed at any age without frame history.
-    vec3 offset = tangent * (sin(bend) * 0.5 + age * (0.08 + uStringiness * 0.045)) +
-                  across * (1.0 - cos(bend)) * (0.22 + uStringiness * 0.025) +
-                  n * sin(bend * 0.72) * 0.2;
-    offset += uDirection * age * age * 0.04;
-    offset += flow(original * 2.7, age * 1.8) * uTurbulence * age * 0.16;
-    // A small coherent time component keeps released fibres alive during a
-    // held shape. The engine addresses motionPhase from clip time, so seeking
-    // is deterministic and animation pause freezes it exactly.
-    offset += flow(original * 3.4 + vec3(age * 0.7), motionPhase * 0.7) *
-              age * (0.045 + uTurbulence * 0.1);
-    offset += (aSeed - 0.5) * uScatter * age * 0.055;
-    offset.z *= uDepth;
-    return original + offset * distance;
+    vec3 drift = petalDrift(original);
+    float travel = 1.35 * (uSpread / (0.8 + uSpread)) * age * (0.4 + age * 0.6) * (0.82 + aSeed.y * 0.36);
+    float stepLength = travel * 0.5;
+    float phase = motionPhase * 0.6 + aSurface.x * 0.25;
+    vec3 pointOnPath = original;
+    // Two midpoint steps (four field samples), recomputed from immutable P0.
+    // Stable per-particle travel and spatial release break a surface into
+    // correlated moving grains instead of fading a stationary flower card.
+    for (int streamStep = 0; streamStep < 2; streamStep++) {
+      vec3 velocity = petalVelocity(pointOnPath, drift, phase);
+      vec3 midpoint = pointOnPath + velocity * stepLength * 0.5;
+      pointOnPath += petalVelocity(midpoint, drift, phase) * stepLength;
+    }
+    vec3 grain = (aSeed - 0.5) * uScatter * travel * 0.12;
+    grain.z *= uDepth;
+    grain -= drift * dot(grain, drift);
+    return pointOnPath + grain;
   }
 
   float progressAt(float seconds) {
@@ -246,6 +257,7 @@ export const particleVertexShader = /* glsl */ `
       }
     #endif
     float visibility = 1.0;
+    float tailBirth = 1.0;
     vec3 displaced;
     vLocalAge = 0.0;
     if (petalActive) {
@@ -256,30 +268,17 @@ export const particleVertexShader = /* glsl */ `
           // Sample the actual particle trajectory. No extra circular geometry.
           float endingProgress = mix(min(uProgress, 0.94), uProgress, uFade);
           float shrink = mix(1.0, 0.25, smoothstep(0.8, 0.985, endingProgress));
-          sampledAge = max(0.0, sampledAge - history * (0.05 + uTrail * 0.35) * shrink);
-          t = max(0.0, t - history * uTrail * 0.45 * uMotionSpeed * shrink);
+          sampledAge = max(0.0, sampledAge - history * (0.04 + uTrail * 0.2) * shrink);
+          t = max(0.0, t - history * uTrail * 0.35 * uMotionSpeed * shrink);
         #else
           sampledAge = max(0.0, sampledAge - history * (0.025 + uTrail * 0.085));
         #endif
       #endif
       displaced = petalPosition(original, sampledAge, t);
-      #ifdef TRAIL
-        #ifndef PARTICLE_TRAIL
-        vec3 coilNormal = surfaceNormal(original);
-        vec3 coilGuide = curlVelocity(original * uFlowScale, 0.0) + uDirection * 0.6;
-        vec3 coilTangent = normalize(coilGuide - coilNormal * dot(coilGuide, coilNormal) * 0.85 + vec3(0.0001));
-        vec3 coilAcross = normalize(cross(coilNormal, coilTangent) + vec3(0.0001));
-        vec3 coilSide = normalize(coilAcross * 0.84 + coilNormal * 0.54);
-        float coilPhase = aSurface.x * 6.2831853 + aSeed.x * 0.9;
-        float coilAngle = history * 6.2831853 * (1.0 + aSeed.z * 0.5);
-        float coilRadius = (0.02 + aSeed.y * 0.04) * smoothstep(0.02, 0.18, vLocalAge);
-        // Difference-of-phases makes history zero exactly the real point head.
-        // The coil is local geometry, not a feedback image or accumulated path.
-        displaced += coilRadius * (coilTangent * (sin(coilPhase + coilAngle) - sin(coilPhase)) +
-                                   coilSide * (cos(coilPhase + coilAngle) - cos(coilPhase)));
-        #endif
+      #ifdef PARTICLE_TRAIL
+        tailBirth = smoothstep(0.0, 0.025, sampledAge);
       #endif
-      visibility = 1.0 - smoothstep(0.28, 0.98, vLocalAge) * 0.86;
+      visibility = 1.0 - smoothstep(0.2, 0.95, vLocalAge) * 0.25;
     } else displaced = displace(original, p, t, visibility);
     vec3 normal = surfaceNormal(original);
     #ifdef AMBIENT
@@ -300,7 +299,7 @@ export const particleVertexShader = /* glsl */ `
       vColor *= surfaceLight;
     }
     #ifdef TRAIL
-      if (petalActive) vColor = mix(vColor, mix(uColor, aColor, uOriginalColor), 0.7);
+      if (petalActive) vColor = mix(vColor, uOriginalColor > 0.5 ? aColor : uColor, 0.7);
     #endif
     vShimmer = 0.82 + 0.18 * aSeed.z;
     vSpark = step(1.0 - uSparkle * 0.035, aSeed.z);
@@ -312,7 +311,7 @@ export const particleVertexShader = /* glsl */ `
                   mix(0.28, 1.0, step(0.8, aSeed.z));
     if (petalActive) {
       vTrailAlpha = smoothstep(0.03, 0.2, vLocalAge) *
-        pow(max(0.0, 1.0 - history), 1.1) * uTrail * (0.48 + aSeed.z * 0.52);
+        pow(max(0.0, 1.0 - history), 1.1) * uTrail * (0.48 + aSeed.z * 0.52) * tailBirth;
     }
     vec4 viewPosition = modelViewMatrix * vec4(displaced, 1.0);
     gl_Position = projectionMatrix * viewPosition;
@@ -355,6 +354,7 @@ export const particleFragmentShader = /* glsl */ `
     float alpha;
     #ifdef TRAIL
       #ifdef PARTICLE_TRAIL
+        if (petalWeight < 0.5) discard;
         float radius = length(gl_PointCoord - vec2(0.5)) * 2.0;
         if (radius > 1.0) discard;
         float core = 1.0 - smoothstep(0.05, 0.98, radius);
@@ -362,17 +362,18 @@ export const particleFragmentShader = /* glsl */ `
         // Each grain has an immutable lifetime; strands break into dots rather
         // than surviving as a graphic line after the source particles vanish.
         float grain = fract(sin(vHistory * 79.3 + vSeed.x * 311.7 + vSeed.y * 127.1) * 43758.5453);
-        float death = 0.82 + grain * 0.2;
-        float survival = 1.0 - smoothstep(death - 0.035, death + 0.025, endingProgress);
+        float death = 0.72 + grain * 0.31;
+        float survival = mix(1.0, 1.0 - smoothstep(death - 0.04, death + 0.03, endingProgress), uFade);
         float retain = mix(1.0, 0.18, smoothstep(0.8, 0.985, endingProgress));
         float shortTail = 1.0 - smoothstep(retain - 0.1, retain + 0.08, vHistory);
+        float density = mix(1.0, 0.4, smoothstep(0.45, 0.94, endingProgress));
+        float broken = 1.0 - smoothstep(density - 0.1, density + 0.08, grain);
+        broken = mix(1.0, broken, smoothstep(0.0, 0.08, vHistory));
         alpha = core * vTrailAlpha * uOpacity * dissolve * survival * shortTail *
-                smoothstep(0.65, 0.78, uProgress) * 0.8;
+                broken * smoothstep(0.01, 0.1, uProgress) * 0.8;
       #else
+        if (petalWeight > 0.5) discard;
       alpha = vTrailAlpha * uOpacity * dissolve * mix(vVisibility, 1.0, petalWeight) * mix(0.42, 0.6, petalWeight);
-        // Preserve the approved early/middle frames exactly, and retire their
-        // legacy coil layer only when the particle ending starts.
-        if (petalWeight > 0.5 && uProgress > 0.65) alpha *= 1.0 - smoothstep(0.65, 0.78, uProgress);
       #endif
     #else
       float radius = length(gl_PointCoord - vec2(0.5)) * 2.0;
@@ -384,14 +385,12 @@ export const particleFragmentShader = /* glsl */ `
       if (uSurfaceMode > 0.5) {
         alpha = (1.0 - smoothstep(0.52, 0.99, radius)) * uOpacity * dissolve * vVisibility;
         #ifndef AMBIENT
-          alpha *= 1.0 - smoothstep(0.45, 0.91, uProgress) * petalWeight * 0.85;
-          if (petalWeight > 0.5 && uProgress > 0.65) {
+          if (petalWeight > 0.5) {
             float endingProgress = mix(min(uProgress, 0.94), uProgress, uFade);
-            float death = 0.68 + vSeed.x * 0.3;
-            float survival = 1.0 - smoothstep(death - 0.045, death + 0.035, endingProgress);
-            float grains = (1.0 - smoothstep(0.52, 0.99, radius)) * uOpacity * dissolve *
-                           (0.24 + vSeed.z * 0.18) * survival;
-            alpha = mix(alpha, grains, smoothstep(0.65, 0.88, uProgress));
+            float localProgress = endingProgress * mix(0.65, 1.0, vLocalAge);
+            float death = 0.68 + vSeed.x * 0.36;
+            float survival = mix(1.0, 1.0 - smoothstep(death - 0.045, death + 0.035, localProgress), uFade);
+            alpha *= survival;
             if (alpha < 0.002) discard;
           } else if (alpha < 0.075) discard;
         #endif

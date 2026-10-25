@@ -530,8 +530,9 @@ test('petal layers use independent bounded prefixes while the main geometry and 
   assert.equal(engine.state.ambientCount, 600);
   assert.equal(engine.state.filamentCount, 900);
   assert.equal(engine.ambientGeometry.drawRange.count, 600);
-  assert.equal(engine.trailGeometry.instanceCount, 900);
-  assert.equal(engine.trailGeometry.getAttribute('position').count, 48);
+  assert.equal(engine.trailGeometry.instanceCount, 0, 'petal preset never submits line segments');
+  assert.equal(engine.particleTrailGeometry.instanceCount, 900);
+  assert.equal(engine.trailGeometry.getAttribute('position').count, 6);
   assert.equal(engine.material.depthWrite, true);
   assert.equal(engine.material.blending, THREE.NormalBlending);
   assert.equal(engine.material.uniforms.uOriginalColor.value, 0, 'the user can override the preset with uniform colour');
@@ -558,7 +559,7 @@ test('the retained petal preset flag cannot override the other five effect modes
     assert.equal(engine.params.petalFlow, true, 'switching modes keeps the shared preset controls');
     assert.equal(engine.material.uniforms.uMode.value, index);
     assert.equal(engine.material.uniforms.uPetalFlow.value, effect === 'erosion' ? 1 : 0);
-    assert.equal(engine.trailGeometry.getAttribute('position').count, effect === 'erosion' ? 48 : 6);
+    assert.equal(engine.trailGeometry.getAttribute('position').count, 6);
     assert.equal(engine.state.filamentCount, effect === 'erosion' ? 900 : 0);
   }
 });
@@ -584,15 +585,16 @@ test('ending particle paths have 25 unique history samples and retain the existi
   assert.equal(engine.particleTrails.geometry, engine.particleTrailGeometry);
 });
 
-test('ending particle layer is absent through the exact early boundary and at faded/restored endpoints', () => {
+test('petal preset uses only point tails throughout release, with no lines at any progress', () => {
   const engine = editingEngine();
   engine.effect = 'erosion';
   engine.setParams({ surfaceMode: true, petalFlow: true, fade: true, trail: 0.55 });
-  engine.setProgress(0.65); engine.render();
-  assert.equal(engine.particleTrails.visible, false);
-  assert.equal(engine.trails.visible, true);
-  engine.setProgress(0.85); engine.render();
-  assert.equal(engine.particleTrails.visible, true);
+  for (const progress of [0.02, 0.2, 0.45, 0.65, 0.85, 0.99]) {
+    engine.setProgress(progress); engine.render();
+    assert.equal(engine.particleTrails.visible, true);
+    assert.equal(engine.trails.visible, false);
+    assert.equal(engine.trailGeometry.instanceCount, 0);
+  }
   engine.setProgress(1); engine.render();
   assert.equal(engine.points.visible, false);
   assert.equal(engine.particleTrails.visible, false);

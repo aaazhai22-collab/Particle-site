@@ -653,7 +653,7 @@ export class ParticleEngine {
   }
 
   private updateTrailPath(): void {
-    const segments = this.isPetalFlowActive() ? 24 : 3;
+    const segments = 3;
     const path = new Float32Array(segments * 6);
     for (let segment = 0; segment < segments; segment++) {
       path[segment * 6] = segment / segments;
@@ -671,7 +671,7 @@ export class ParticleEngine {
     this.current.ambientCount = layers.ambient;
     this.current.filamentCount = petalActive ? layers.filaments : 0;
     this.ambientGeometry.setDrawRange(0, layers.ambient);
-    this.trailGeometry.instanceCount = petalActive ? layers.filaments : Math.min(this.current.actualCount, this.trailBudget());
+    this.trailGeometry.instanceCount = petalActive ? 0 : Math.min(this.current.actualCount, this.trailBudget());
     this.particleTrailGeometry.instanceCount = petalActive ? layers.filaments : 0;
   }
 
@@ -885,8 +885,8 @@ export class ParticleEngine {
     const span = this.values.trail * (0.18 + this.values.stringiness * 0.22) * (1 + this.values.curl * 0.2);
     u.uTrailTimeSpan.value = span * this.values.motionSpeed;
     u.uTrailProgressSpan.value = this.values.trail * 0.22;
-    this.trails.visible = this.values.trail > 0 && this.current.progress > 0.00001 && this.trailGeometry.instanceCount > 0;
-    this.particleTrails.visible = this.isPetalFlowActive() && this.values.trail > 0 && this.current.progress > 0.65 && this.particleTrailGeometry.instanceCount > 0;
+    this.trails.visible = !this.isPetalFlowActive() && this.values.trail > 0 && this.current.progress > 0.00001 && this.trailGeometry.instanceCount > 0;
+    this.particleTrails.visible = this.isPetalFlowActive() && this.values.trail > 0 && this.current.progress > 0.00001 && this.particleTrailGeometry.instanceCount > 0;
     this.points.visible = !(this.values.fade && this.current.progress >= 1);
     this.trails.visible &&= this.points.visible;
     this.particleTrails.visible &&= this.points.visible;

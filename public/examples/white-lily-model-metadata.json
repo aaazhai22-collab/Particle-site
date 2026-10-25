@@ -1,0 +1,846 @@
+{
+  "name": "白百合 · 参考照片的立体近似",
+  "version": 1,
+  "petalCount": 6,
+  "source": {
+    "kind": "photo-guided-artistic-approximation",
+    "reference": "white-lily-reference.png",
+    "referenceSha256": "480d34eed927a2363508786d7baa2862b73523a83b17b79e1014a092f88ddf03",
+    "exactReconstruction": false,
+    "unseenBackInferred": true
+  },
+  "meshCount": 25,
+  "categories": {
+    "closed-petal": 6,
+    "throat": 1,
+    "filament": 6,
+    "anther": 6,
+    "pistil": 1,
+    "stigma": 3,
+    "receptacle": 1,
+    "pedicel": 1
+  },
+  "vertices": 68196,
+  "triangles": 136292,
+  "bytes": 4118420,
+  "sha256": "b30e54029c3a2b5fcfeb00af08e31f4271dee90feb2de33bec666d7ecdcabe5e",
+  "bounds": {
+    "min": [
+      -1.6900362424840065,
+      -1.2576993623543682,
+      -1.0604881004937718
+    ],
+    "max": [
+      1.1370284301777438,
+      1.62521580394099,
+      1.0236097441376988
+    ],
+    "size": [
+      2.8270646726617503,
+      2.8829151662953585,
+      2.0840978446314704
+    ],
+    "depthToWidth": 0.7371949657838006
+  },
+  "attributes": {
+    "POSITION": "VEC3 Float32",
+    "NORMAL": "VEC3 Float32 outward",
+    "COLOR_0": "VEC3 Float32 linear RGB, locally sampled photograph / ivory blend",
+    "_SURFACE": {
+      "x": "stable petal region 0..1",
+      "y": "edge release weight 0..1",
+      "z": "0 petal / 1 stamens and pistil / 2 back receptacle and pedicel"
+    }
+  },
+  "validation": {
+    "allValuesFinite": true,
+    "allTrianglesNondegenerate": true,
+    "allMeshesClosed": true,
+    "allSignedVolumesPositive": true,
+    "outwardNormals": true,
+    "noImagePlane": true,
+    "noExternalResources": true
+  },
+  "limitations": [
+    "依据单张参考图手工补建立体结构，非精确三维重建；背面及遮挡区域为艺术近似。",
+    "花瓣原色依据照片局部采样与乳白底色混合，排除背景和花药遮挡；没有照片背景矩形。",
+    "软件预览用于几何检查，实际粒子外观由浏览器着色器决定。"
+  ],
+  "meshes": [
+    {
+      "name": "white-lily-petal-01-upper-back",
+      "category": "closed-petal",
+      "organ": 0,
+      "vertices": 10370,
+      "triangles": 20736,
+      "bounds": {
+        "min": [
+          -0.6074777976704717,
+          -0.019492033977521597,
+          -0.5366230627568386
+        ],
+        "max": [
+          0.17442240160602537,
+          1.62521580394099,
+          0.28496591456921966
+        ]
+      },
+      "area": 2.2957373637542395,
+      "signedVolume": 0.01873520589936963,
+      "minTriangleArea": 2.518774211831365e-06,
+      "closed": true,
+      "outwardWinding": true,
+      "normalAgreementMinimum": 0.48438926394478077,
+      "thickness": 0.017,
+      "surfaceRegion": 0.0,
+      "edgeReleaseRange": [
+        0.0,
+        1.0
+      ]
+    },
+    {
+      "name": "white-lily-petal-02-upper-right",
+      "category": "closed-petal",
+      "organ": 0,
+      "vertices": 10370,
+      "triangles": 20736,
+      "bounds": {
+        "min": [
+          -0.02766891789267338,
+          -0.04650130517178921,
+          -0.47578067435702726
+        ],
+        "max": [
+          1.1370284301777438,
+          1.194555689692576,
+          0.45775333436766835
+        ]
+      },
+      "area": 2.284577090850421,
+      "signedVolume": 0.020678799384604218,
+      "minTriangleArea": 2.0618583574730786e-06,
+      "closed": true,
+      "outwardWinding": true,
+      "normalAgreementMinimum": 0.24690986135157067,
+      "thickness": 0.019000000000000003,
+      "surfaceRegion": 0.2,
+      "edgeReleaseRange": [
+        0.0,
+        1.0
+      ]
+    },
+    {
+      "name": "white-lily-petal-03-lower-right-front",
+      "category": "closed-petal",
+      "organ": 0,
+      "vertices": 10370,
+      "triangles": 20736,
+      "bounds": {
+        "min": [
+          -0.011152831367151611,
+          -0.6838878699756474,
+          -0.3760129867126907
+        ],
+        "max": [
+          0.9359584406170007,
+          0.17824202440391085,
+          0.43495946976177785
+        ]
+      },
+      "area": 1.813016458707044,
+      "signedVolume": 0.01812561482010173,
+      "minTriangleArea": 1.5232281948175156e-06,
+      "closed": true,
+      "outwardWinding": true,
+      "normalAgreementMinimum": 0.27135704278332917,
+      "thickness": 0.021,
+      "surfaceRegion": 0.4,
+      "edgeReleaseRange": [
+        0.0,
+        1.0
+      ]
+    },
+    {
+      "name": "white-lily-petal-04-lower-long",
+      "category": "closed-petal",
+      "organ": 0,
+      "vertices": 10370,
+      "triangles": 20736,
+      "bounds": {
+        "min": [
+          -0.8604319995416311,
+          -1.2576993623543682,
+          -0.5673910134054634
+        ],
+        "max": [
+          0.013957198337362784,
+          0.0661232030961391,
+          0.2145225855330203
+        ]
+      },
+      "area": 1.9779287273901847,
+      "signedVolume": 0.016083883461174286,
+      "minTriangleArea": 1.258509463577078e-06,
+      "closed": true,
+      "outwardWinding": true,
+      "normalAgreementMinimum": 0.2374724577017485,
+      "thickness": 0.017,
+      "surfaceRegion": 0.6,
+      "edgeReleaseRange": [
+        0.0,
+        1.0
+      ]
+    },
+    {
+      "name": "white-lily-petal-05-lower-left",
+      "category": "closed-petal",
+      "organ": 0,
+      "vertices": 10370,
+      "triangles": 20736,
+      "bounds": {
+        "min": [
+          -1.6900362424840065,
+          -0.6211610042729429,
+          -0.45704919181339715
+        ],
+        "max": [
+          0.006960850185159699,
+          0.44691885539507137,
+          0.39834670150078405
+        ]
+      },
+      "area": 2.7610047707349725,
+      "signedVolume": 0.025139135713573204,
+      "minTriangleArea": 2.692918670764919e-06,
+      "closed": true,
+      "outwardWinding": true,
+      "normalAgreementMinimum": 0.40333634899182225,
+      "thickness": 0.019000000000000003,
+      "surfaceRegion": 0.8,
+      "edgeReleaseRange": [
+        0.0,
+        1.0
+      ]
+    },
+    {
+      "name": "white-lily-petal-06-upper-left-back",
+      "category": "closed-petal",
+      "organ": 0,
+      "vertices": 10370,
+      "triangles": 20736,
+      "bounds": {
+        "min": [
+          -1.3851120698114066,
+          -0.10556999754811405,
+          -0.5477209601460941
+        ],
+        "max": [
+          0.008005391005123961,
+          0.9439476276047812,
+          0.18118025581447028
+        ]
+      },
+      "area": 2.0559036964911837,
+      "signedVolume": 0.0205100726432131,
+      "minTriangleArea": 1.354641410362082e-06,
+      "closed": true,
+      "outwardWinding": true,
+      "normalAgreementMinimum": 0.19420143214588273,
+      "thickness": 0.021,
+      "surfaceRegion": 1.0,
+      "edgeReleaseRange": [
+        0.0,
+        1.0
+      ]
+    },
+    {
+      "name": "pale-green-flower-throat",
+      "category": "throat",
+      "organ": 1,
+      "vertices": 418,
+      "triangles": 832,
+      "bounds": {
+        "min": [
+          -0.18,
+          -0.17,
+          -0.54
+        ],
+        "max": [
+          0.18,
+          0.17,
+          -0.26
+        ]
+      },
+      "area": 0.33142771428836093,
+      "signedVolume": 0.01760618087393159,
+      "minTriangleArea": 0.00014554774501596496,
+      "closed": true,
+      "outwardWinding": true,
+      "normalAgreementMinimum": 0.9847536701917601,
+      "thickness": null,
+      "surfaceRegion": 0.5,
+      "edgeReleaseRange": [
+        0.25,
+        0.9
+      ]
+    },
+    {
+      "name": "pale-green-filament-01",
+      "category": "filament",
+      "organ": 1,
+      "vertices": 302,
+      "triangles": 600,
+      "bounds": {
+        "min": [
+          -0.7471424038288365,
+          0.02738060777332149,
+          -0.2872477578638031
+        ],
+        "max": [
+          -0.01917140162878242,
+          0.6923913154282343,
+          0.6085512365809926
+        ]
+      },
+      "area": 0.09775779611544509,
+      "signedVolume": 0.0005618450005676127,
+      "minTriangleArea": 3.024999999999987e-05,
+      "closed": true,
+      "outwardWinding": true,
+      "normalAgreementMinimum": 0.4230041127399632,
+      "thickness": null,
+      "surfaceRegion": 0.0,
+      "edgeReleaseRange": [
+        0.1,
+        0.65
+      ]
+    },
+    {
+      "name": "brown-pollen-anther-01",
+      "category": "anther",
+      "organ": 1,
+      "vertices": 338,
+      "triangles": 672,
+      "bounds": {
+        "min": [
+          -0.8232869348690374,
+          0.6297046278646652,
+          0.5973007589358011
+        ],
+        "max": [
+          -0.7026537118488838,
+          0.7817078057210867,
+          0.6626992410641989
+        ]
+      },
+      "area": 0.0290826177836071,
+      "signedVolume": 0.00034972398391055196,
+      "minTriangleArea": 5.3014037477538135e-06,
+      "closed": true,
+      "outwardWinding": true,
+      "normalAgreementMinimum": 0.9362531925995192,
+      "thickness": null,
+      "surfaceRegion": 0.0,
+      "edgeReleaseRange": [
+        0.25,
+        0.9
+      ]
+    },
+    {
+      "name": "pale-green-filament-02",
+      "category": "filament",
+      "organ": 1,
+      "vertices": 302,
+      "triangles": 600,
+      "bounds": {
+        "min": [
+          -0.35556420492902785,
+          0.03036925226879225,
+          -0.2856115355289762
+        ],
+        "max": [
+          0.0021845484653830773,
+          0.7079111555337823,
+          0.7510523584609547
+        ]
+      },
+      "area": 0.09483612689796392,
+      "signedVolume": 0.000544905801192636,
+      "minTriangleArea": 3.0249999999999715e-05,
+      "closed": true,
+      "outwardWinding": true,
+      "normalAgreementMinimum": 0.42335584817821553,
+      "thickness": null,
+      "surfaceRegion": 0.2,
+      "edgeReleaseRange": [
+        0.1,
+        0.65
+      ]
+    },
+    {
+      "name": "brown-pollen-anther-02",
+      "category": "anther",
+      "organ": 1,
+      "vertices": 338,
+      "triangles": 672,
+      "bounds": {
+        "min": [
+          -0.4162319399865642,
+          0.6458730312407011,
+          0.7471159549211364
+        ],
+        "max": [
+          -0.2982948085551033,
+          0.7998255479829814,
+          0.8128840450788637
+        ]
+      },
+      "area": 0.029082617783607087,
+      "signedVolume": 0.0003497239839104791,
+      "minTriangleArea": 5.3014037477540795e-06,
+      "closed": true,
+      "outwardWinding": true,
+      "normalAgreementMinimum": 0.9362531925995192,
+      "thickness": null,
+      "surfaceRegion": 0.2,
+      "edgeReleaseRange": [
+        0.25,
+        0.9
+      ]
+    },
+    {
+      "name": "pale-green-filament-03",
+      "category": "filament",
+      "organ": 1,
+      "vertices": 302,
+      "triangles": 600,
+      "bounds": {
+        "min": [
+          -0.19941216880281293,
+          0.02231950612419161,
+          -0.2861664357031063
+        ],
+        "max": [
+          0.033760416772483384,
+          0.739739996456649,
+          0.5936282010513189
+        ]
+      },
+      "area": 0.0852266348669442,
+      "signedVolume": 0.0004892285778915951,
+      "minTriangleArea": 3.0249999999999848e-05,
+      "closed": true,
+      "outwardWinding": true,
+      "normalAgreementMinimum": 0.43232860078702984,
+      "thickness": null,
+      "surfaceRegion": 0.4,
+      "edgeReleaseRange": [
+        0.1,
+        0.65
+      ]
+    },
+    {
+      "name": "brown-pollen-anther-03",
+      "category": "anther",
+      "organ": 1,
+      "vertices": 338,
+      "triangles": 672,
+      "bounds": {
+        "min": [
+          -0.25485719203407603,
+          0.6820502695379552,
+          0.5869318871423297
+        ],
+        "max": [
+          -0.13972088724344342,
+          0.8379344770669674,
+          0.6530681128576703
+        ]
+      },
+      "area": 0.029082617783607087,
+      "signedVolume": 0.000349723983910375,
+      "minTriangleArea": 5.3014037477539075e-06,
+      "closed": true,
+      "outwardWinding": true,
+      "normalAgreementMinimum": 0.9362531925995258,
+      "thickness": null,
+      "surfaceRegion": 0.4,
+      "edgeReleaseRange": [
+        0.25,
+        0.9
+      ]
+    },
+    {
+      "name": "pale-green-filament-04",
+      "category": "filament",
+      "organ": 1,
+      "vertices": 302,
+      "triangles": 600,
+      "bounds": {
+        "min": [
+          -0.28384975684308206,
+          0.0010865773604508914,
+          -0.2840638326144087
+        ],
+        "max": [
+          0.0022899063198772683,
+          0.4898024266846325,
+          0.8454196549860539
+        ]
+      },
+      "area": 0.09324079966827725,
+      "signedVolume": 0.0005356983300739609,
+      "minTriangleArea": 3.0249999999999787e-05,
+      "closed": true,
+      "outwardWinding": true,
+      "normalAgreementMinimum": 0.423628669923187,
+      "thickness": null,
+      "surfaceRegion": 0.6,
+      "edgeReleaseRange": [
+        0.1,
+        0.65
+      ]
+    },
+    {
+      "name": "brown-pollen-anther-04",
+      "category": "anther",
+      "organ": 1,
+      "vertices": 338,
+      "triangles": 672,
+      "bounds": {
+        "min": [
+          -0.33936022464229926,
+          0.418240030547723,
+          0.8467491445455819
+        ],
+        "max": [
+          -0.22688308015892766,
+          0.5760309059272981,
+          0.9132508554544181
+        ]
+      },
+      "area": 0.02908261778360708,
+      "signedVolume": 0.0003497239839103626,
+      "minTriangleArea": 5.301403747753807e-06,
+      "closed": true,
+      "outwardWinding": true,
+      "normalAgreementMinimum": 0.9362531925995232,
+      "thickness": null,
+      "surfaceRegion": 0.6,
+      "edgeReleaseRange": [
+        0.25,
+        0.9
+      ]
+    },
+    {
+      "name": "pale-green-filament-05",
+      "category": "filament",
+      "organ": 1,
+      "vertices": 302,
+      "triangles": 600,
+      "bounds": {
+        "min": [
+          -0.7871413722846009,
+          -0.0019762319928805887,
+          -0.28600696237441053
+        ],
+        "max": [
+          -0.03610990311101579,
+          0.43908753272474277,
+          0.792537230027181
+        ]
+      },
+      "area": 0.10199180537923203,
+      "signedVolume": 0.0005864062095510483,
+      "minTriangleArea": 3.024999999999979e-05,
+      "closed": true,
+      "outwardWinding": true,
+      "normalAgreementMinimum": 0.418666182522732,
+      "thickness": null,
+      "surfaceRegion": 0.8,
+      "edgeReleaseRange": [
+        0.1,
+        0.65
+      ]
+    },
+    {
+      "name": "brown-pollen-anther-05",
+      "category": "anther",
+      "organ": 1,
+      "vertices": 338,
+      "triangles": 672,
+      "bounds": {
+        "min": [
+          -0.8580823652488698,
+          0.36301774611591714,
+          0.78656836925121
+        ],
+        "max": [
+          -0.7481879528063475,
+          0.522682260547505,
+          0.8534316307487899
+        ]
+      },
+      "area": 0.029082617783607087,
+      "signedVolume": 0.00034972398391027267,
+      "minTriangleArea": 5.301403747754058e-06,
+      "closed": true,
+      "outwardWinding": true,
+      "normalAgreementMinimum": 0.936253192599523,
+      "thickness": null,
+      "surfaceRegion": 0.8,
+      "edgeReleaseRange": [
+        0.25,
+        0.9
+      ]
+    },
+    {
+      "name": "pale-green-filament-06",
+      "category": "filament",
+      "organ": 1,
+      "vertices": 302,
+      "triangles": 600,
+      "bounds": {
+        "min": [
+          -0.5724165997581129,
+          -0.016504192159430338,
+          -0.2841243567707136
+        ],
+        "max": [
+          -0.023889728864349133,
+          0.3007969964899544,
+          0.9555144435619956
+        ]
+      },
+      "area": 0.10280177522735764,
+      "signedVolume": 0.0005911138217827962,
+      "minTriangleArea": 3.0249999999999726e-05,
+      "closed": true,
+      "outwardWinding": true,
+      "normalAgreementMinimum": 0.4167280925693012,
+      "thickness": null,
+      "surfaceRegion": 1.0,
+      "edgeReleaseRange": [
+        0.1,
+        0.65
+      ]
+    },
+    {
+      "name": "brown-pollen-anther-06",
+      "category": "anther",
+      "organ": 1,
+      "vertices": 338,
+      "triangles": 672,
+      "bounds": {
+        "min": [
+          -0.6338786561197145,
+          0.21924487081579186,
+          0.9563902558623011
+        ],
+        "max": [
+          -0.5267056848706401,
+          0.38074137267877317,
+          1.0236097441376988
+        ]
+      },
+      "area": 0.029082617783607087,
+      "signedVolume": 0.00034972398391043953,
+      "minTriangleArea": 5.301403747753968e-06,
+      "closed": true,
+      "outwardWinding": true,
+      "normalAgreementMinimum": 0.9362531925995223,
+      "thickness": null,
+      "surfaceRegion": 1.0,
+      "edgeReleaseRange": [
+        0.25,
+        0.9
+      ]
+    },
+    {
+      "name": "central-green-pistil-style",
+      "category": "pistil",
+      "organ": 1,
+      "vertices": 418,
+      "triangles": 832,
+      "bounds": {
+        "min": [
+          -0.404572638142134,
+          -0.012977400432388032,
+          -0.25632639906675475
+        ],
+        "max": [
+          0.013432400188446738,
+          0.47564245197097627,
+          0.967418005704245
+        ]
+      },
+      "area": 0.1560091123517967,
+      "signedVolume": 0.0013869064699755143,
+      "minTriangleArea": 5.3491184029245815e-05,
+      "closed": true,
+      "outwardWinding": true,
+      "normalAgreementMinimum": 0.5093821808093786,
+      "thickness": null,
+      "surfaceRegion": 0.5,
+      "edgeReleaseRange": [
+        0.1,
+        0.65
+      ]
+    },
+    {
+      "name": "central-stigma-lobe-1",
+      "category": "stigma",
+      "organ": 1,
+      "vertices": 222,
+      "triangles": 440,
+      "bounds": {
+        "min": [
+          -0.4005714285714286,
+          0.42600000000000005,
+          0.94
+        ],
+        "max": [
+          -0.3325714285714285,
+          0.494,
+          1.016
+        ]
+      },
+      "area": 0.015420943178995592,
+      "signedVolume": 0.0001779097149125919,
+      "minTriangleArea": 1.2096764946529932e-05,
+      "closed": true,
+      "outwardWinding": true,
+      "normalAgreementMinimum": 0.9812138600681614,
+      "thickness": null,
+      "surfaceRegion": 0.5,
+      "edgeReleaseRange": [
+        0.25,
+        0.9
+      ]
+    },
+    {
+      "name": "central-stigma-lobe-2",
+      "category": "stigma",
+      "organ": 1,
+      "vertices": 222,
+      "triangles": 440,
+      "bounds": {
+        "min": [
+          -0.4335714285714286,
+          0.4450525588832577,
+          0.94
+        ],
+        "max": [
+          -0.36557142857142855,
+          0.5130525588832576,
+          1.016
+        ]
+      },
+      "area": 0.015420943178995596,
+      "signedVolume": 0.0001779097149127051,
+      "minTriangleArea": 1.2096764946529932e-05,
+      "closed": true,
+      "outwardWinding": true,
+      "normalAgreementMinimum": 0.9812138600681614,
+      "thickness": null,
+      "surfaceRegion": 0.5,
+      "edgeReleaseRange": [
+        0.25,
+        0.9
+      ]
+    },
+    {
+      "name": "central-stigma-lobe-3",
+      "category": "stigma",
+      "organ": 1,
+      "vertices": 222,
+      "triangles": 440,
+      "bounds": {
+        "min": [
+          -0.4335714285714286,
+          0.4069474411167424,
+          0.94
+        ],
+        "max": [
+          -0.36557142857142855,
+          0.47494744111674236,
+          1.016
+        ]
+      },
+      "area": 0.015420943178995592,
+      "signedVolume": 0.00017790971491261809,
+      "minTriangleArea": 1.2096764946529932e-05,
+      "closed": true,
+      "outwardWinding": true,
+      "normalAgreementMinimum": 0.9812138600681614,
+      "thickness": null,
+      "surfaceRegion": 0.5,
+      "edgeReleaseRange": [
+        0.25,
+        0.9
+      ]
+    },
+    {
+      "name": "inferred-green-back-receptacle",
+      "category": "receptacle",
+      "organ": 2,
+      "vertices": 366,
+      "triangles": 728,
+      "bounds": {
+        "min": [
+          -0.19,
+          -0.195,
+          -0.74
+        ],
+        "max": [
+          0.19,
+          0.16499999999999998,
+          -0.34
+        ]
+      },
+      "area": 0.4487649777981313,
+      "signedVolume": 0.028055305376403574,
+      "minTriangleArea": 0.00018975122791659211,
+      "closed": true,
+      "outwardWinding": true,
+      "normalAgreementMinimum": 0.9875782777552092,
+      "thickness": null,
+      "surfaceRegion": 0.5,
+      "edgeReleaseRange": [
+        0.25,
+        0.9
+      ]
+    },
+    {
+      "name": "short-inferred-green-pedicel",
+      "category": "pedicel",
+      "organ": 2,
+      "vertices": 268,
+      "triangles": 532,
+      "bounds": {
+        "min": [
+          -0.03141179362315793,
+          -0.2272501645219209,
+          -1.0604881004937718
+        ],
+        "max": [
+          0.1503402553109901,
+          0.01599999591373929,
+          -0.5690886943014907
+        ]
+      },
+      "area": 0.11960887444100299,
+      "signedVolume": 0.001955844650709188,
+      "minTriangleArea": 0.00017173991244863237,
+      "closed": true,
+      "outwardWinding": true,
+      "normalAgreementMinimum": 0.7274694137185775,
+      "thickness": null,
+      "surfaceRegion": 0.5,
+      "edgeReleaseRange": [
+        0.1,
+        0.65
+      ]
+    }
+  ]
+}

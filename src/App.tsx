@@ -14,6 +14,7 @@ import { TimelinePanel } from './TimelinePanel';
 import { MAX_PARTICLES } from './particleLimits';
 import { PETAL_CLIP, PETAL_PARAMS, PETAL_PRESET_NAME, DEFAULT_PETAL_TIMING, normalizePetalTiming, scalePetalTiming, getPetalStages, retimePetalClip, petalPhaseAt } from './petalPreset';
 import type { PetalTiming } from './petalPreset';
+import { WHITE_LILY_PRESET_NAME, WHITE_LILY_PARAMS, WHITE_LILY_CLIP, WHITE_LILY_TIMING } from './whiteLilyPreset';
 
 const EFFECTS = [
   { id:'radial' as Effect, name:'径向扩散', en:'RADIAL', icon:MoveUpRight, description:'从原形态向三维空间舒展' },
@@ -108,7 +109,7 @@ export default function App() {
       engine.current=instance; instance.setTimeline(normalizeClip(DEFAULT_CLIP)); instance.setTimelineLoop(true); instance.setTimelinePlaying(true);
       const r=new CanvasRecorder(instance.canvas,s=>{if(alive){instance.setRecordingLocked(['recording','paused','processing'].includes(s.status));instance.setCaptureActive(s.status==='recording');setRecord({...s});if(recorder.current)setCodec(recorder.current.mimeType);if(s.status==='ready')setVideoOpen(true);if(s.error)setToast(s.error);}},paused=>{if(paused){priorRunning.current=instance.state.running;instance.setRunning(false);}else{instance.setRunning(priorRunning.current);}});
       recorder.current=r; setSupported(r.supported); setCodec(r.mimeType);
-      loadPetalDemo();
+      loadWhiteLilyDemo();
     } catch(error) { setEngineError('预览初始化失败：'+(error instanceof Error?error.message:'请使用支持 WebGL 的桌面浏览器。')); }
     return()=>{alive=false;imports.current.dispose();if(countTimer.current)clearTimeout(countTimer.current);recorder.current?.destroy();engine.current?.destroy();};
   },[]);
@@ -164,6 +165,14 @@ export default function App() {
     e?.setTimeline(nextClip);e?.seekTimeline(0);e?.setEffect('erosion');e?.setTimelineLoop(true);e?.setTimelinePlaying(true);
     notify('已应用「'+PETAL_PRESET_NAME+'」，保留当前素材；空格暂停 / 播放。');
   };
+  const applyWhiteLilyPreset=()=>{
+    if(playbackLocked)return;
+    applyParameterPatch({...WHITE_LILY_PARAMS,colorMode:asset.hasOriginalColors?'original':'uniform'});
+    const nextClip=normalizeClip(WHITE_LILY_CLIP),e=engine.current;
+    setPetalTiming({...WHITE_LILY_TIMING});setClip(nextClip);setEffect('erosion');
+    e?.setTimeline(nextClip);e?.seekTimeline(0);e?.setEffect('erosion');e?.setTimelineLoop(true);e?.setTimelinePlaying(true);
+    notify('已应用「'+WHITE_LILY_PRESET_NAME+'」，保留当前素材；空格暂停 / 播放。');
+  };
   const reset=(keys:(keyof ParticleParams)[])=>{
     const patch:Partial<ParticleParams>={};keys.forEach(key=>Object.assign(patch,{[key]:DEFAULT_PARAMS[key]}));applyParameterPatch(patch);
   };
@@ -172,7 +181,7 @@ export default function App() {
     if(state.progress>.001)notify('正在聚合，随后应用新效果。按空格播放时间轴。');else setEffect(next);
   };
   const applyPreset=(name:string)=>{
-    if(playbackLocked)return;if(name===PETAL_PRESET_NAME){applyPetalPreset();return;}let patch:Partial<ParticleParams>,next:Effect;
+    if(playbackLocked)return;if(name===WHITE_LILY_PRESET_NAME){applyWhiteLilyPreset();return;}if(name===PETAL_PRESET_NAME){applyPetalPreset();return;}let patch:Partial<ParticleParams>,next:Effect;
     if(name==='柔和漂浮'){next='noise';patch={spread:1.25,depth:.9,scatter:.18,stagger:.3,turbulence:.23,motionSpeed:.5,duration:6,size:1.6,glow:.6,exposure:1.3,contrast:.9,curl:.8,sparkle:.18,fade:false,trail:.2};}
     else if(name==='能量爆散'){next='radial';patch={spread:3,depth:1.7,scatter:.7,stagger:.15,turbulence:.18,motionSpeed:1.4,duration:2,size:1.7,glow:1.15,exposure:1.55,contrast:1.15,curl:1.3,sparkle:.7,fade:false,trail:.5};}
     else if(name==='旋涡聚合'){next='vortex';patch={spread:1.6,depth:1.2,scatter:.2,stagger:.35,turbulence:.12,motionSpeed:.8,duration:4,size:1.6,glow:.7,exposure:1.4,contrast:1.05,curl:1.6,sparkle:.3,axis:'y',fade:false,trail:.55};}
@@ -199,6 +208,23 @@ export default function App() {
   };
   const chooseFiles=(files:FileList|null)=>{if(!files?.length)return;const file=files[files.length-1];runImport(file.name,()=>loadParticleAsset(file));};
   const example=(url:string,name:string)=>runImport(name,async()=>{const response=await fetch(url);if(!response.ok)throw new Error('示例素材读取失败，请稍后重试。');return loadParticleAsset(new File([await response.blob()],name));});
+  const loadWhiteLilyDemo=()=>runImport('白百合自然风蚀示例.glb',async()=>{
+    const response=await fetch('/examples/white-lily-model.glb');
+    if(!response.ok)throw new Error('白百合模型暂时无法读取，当前场景已保留，请重试或导入本地 GLB。');
+    const next=await loadParticleAsset(new File([await response.blob()],'白百合自然风蚀示例.glb',{type:'model/gltf-binary'}));
+    return {...next,thumbnail:'/examples/white-lily-preview-front.png',notes:[
+      '参考照片制作的立体近似；背面与遮挡部分为补建。',
+      '白色花瓣、淡绿花心与棕色花药 · 自然风蚀与渐隐回环。',
+      ...next.notes,
+    ]};
+  },()=>{
+    const e=engine.current;if(!e)return;
+    if(countTimer.current){clearTimeout(countTimer.current);countTimer.current=null;}
+    e.setParams({...WHITE_LILY_PARAMS,colorMode:'original'});autoCeiling.current=e.params.count;setParams(e.params);
+    e.setTimeline(WHITE_LILY_CLIP);e.seekTimeline(0);e.setEffect('erosion');e.fitView('full');e.setTimelineLoop(true);e.setTimelinePlaying(true);
+    setPetalTiming({...WHITE_LILY_TIMING});setEffect('erosion');setClip(normalizeClip(WHITE_LILY_CLIP));
+    notify('白百合已就绪：参考照片的立体近似，36 秒自然风蚀回环；数量按设备自动调整。');
+  });
   const loadPetalDemo=()=>runImport('花瓣微流示例.glb',async()=>{
     const response=await fetch('/examples/petal-model.glb');
     if(!response.ok)throw new Error('花瓣模型暂时无法读取，当前场景已保留，请重试或导入本地 GLB。');
@@ -304,7 +330,7 @@ export default function App() {
     <input ref={jsonRef} type="file" className="hidden-file" aria-label="选择参数文件" accept=".json,application/json" onChange={e=>{const file=e.target.files?.[0];if(file)void importSettings(file);e.target.value='';}}/>
     <header className="topbar">
       <a className="brand" href="#" onClick={e=>e.preventDefault()}><span className="brand-mark"><Sparkles size={21}/></span><span>粒子工坊<small>PARTICLE STUDIO</small></span></a>
-      <div className="project-name"><span className="project-dot"/><span className="project-file" title={asset.name}>{asset.name}</span><span className="project-separator">/</span><span className="muted">粒子动画工作台</span><span className="version">V0.5</span></div>
+      <div className="project-name"><span className="project-dot"/><span className="project-file" title={asset.name}>{asset.name}</span><span className="project-separator">/</span><span className="muted">粒子动画工作台</span><span className="version">V0.6</span></div>
       <div className="header-actions"><span className="local-tag"><span/>本地处理</span><button className="icon-button" title="操作说明" aria-label="操作说明" onClick={()=>setHelp(true)}><CircleHelp size={19}/></button><button className="secondary small" disabled={playbackLocked} onClick={()=>jsonRef.current?.click()}><Upload size={14}/>导入参数</button><button className="secondary small" onClick={()=>download(new Blob([JSON.stringify(currentSettings(),null,2)],{type:'application/json'}),'Particle_'+safeName(asset.name)+'_animation.json')}><FileJson size={15}/>导出项目</button></div>
     </header>
     <aside className="left-panel"><div className="panel-heading"><Layers3 size={16}/><span>素材与效果</span><span className="section-index">01</span></div><div className="side-content">
@@ -314,6 +340,7 @@ export default function App() {
         <div className="source-info"><div>{asset.kind==='image'?<Image size={15}/>:<Box size={15}/>}<strong title={asset.name}>{asset.name}</strong><span className="source-check"><Check size={12}/></span></div><p>{asset.kind==='image'?'IMAGE · 颜色像素采样':asset.kind==='model'?'GLB · 多网格表面采样':'SPHERE · 三维表面采样'}</p></div>
       </button>
       <button className="import-button" disabled={activeRecording||!engineReady} onClick={()=>setImportOpen(true)}>{importBusy?<LoaderCircle className="spin" size={15}/>:<Plus size={15}/>} {importBusy?'正在处理素材':'导入图片 / 3D 模型'}<span>PNG · JPG · GLB</span></button>
+      <button className="petal-demo-button" disabled={activeRecording||importBusy||!engineReady} onClick={loadWhiteLilyDemo}><Wind size={14}/><span>白百合 · 自然风蚀<small>参考照片的立体近似 / 36 秒回环</small></span><Play size={12}/></button>
       <button className="petal-demo-button" disabled={activeRecording||importBusy||!engineReady} onClick={loadPetalDemo}><Sparkles size={14}/><span>花瓣微流 · 立体花朵<small>原色 / 1080p / 36 秒回环</small></span><Play size={12}/></button>
       <button className="ding-demo-button" disabled={activeRecording||importBusy||!engineReady} onClick={loadDingDemo}><Box size={14}/>青铜方鼎展示<Play size={12}/></button>
       <div className="source-meta"><span>主体粒子</span><b>{state.actualCount.toLocaleString()} <small>个</small></b></div>
@@ -323,7 +350,7 @@ export default function App() {
       <div className="divider"/><div className="section-title"><span>粒子变化</span><span className="count-label">06</span></div>
       <div className="effect-list">{EFFECTS.map(item=><button key={item.id} title={item.description} className={'effect-card '+(effect===item.id?'selected':'')} onClick={()=>switchEffect(item.id)} disabled={!engineReady||playbackLocked}><span className={'effect-art '+item.id}><item.icon size={22}/></span><span className="effect-info"><strong>{item.name}</strong><small>{item.en}</small></span><span className="effect-radio">{effect===item.id&&<i/>}</span></button>)}</div>
       <div className="divider"/><div className="section-title"><span>视觉预设</span><Sparkles size={13}/></div>
-      <div className="preset-list">{[PETAL_PRESET_NAME,'柔和漂浮','能量爆散','旋涡聚合','深空漂移','错峰卷流','参考视频风格'].map((p,i)=><button disabled={!engineReady||playbackLocked} key={p} onClick={()=>applyPreset(p)}><span className={'preset-dot dot-'+(i%4)}/>{p}<ArrowUpRight size={13}/></button>)}</div>
+      <div className="preset-list">{[WHITE_LILY_PRESET_NAME,PETAL_PRESET_NAME,'柔和漂浮','能量爆散','旋涡聚合','深空漂移','错峰卷流','参考视频风格'].map((p,i)=><button disabled={!engineReady||playbackLocked} key={p} onClick={()=>applyPreset(p)}><span className={'preset-dot dot-'+(i%4)}/>{p}<ArrowUpRight size={13}/></button>)}</div>
       <div className="save-preset"><input aria-label="预设名称" placeholder="给这组效果命名" value={presetName} maxLength={40} onChange={e=>setPresetName(e.target.value)} onKeyDown={e=>{if(e.key==='Enter')savePreset();}}/><button title="保存当前预设" aria-label="保存当前预设" onClick={savePreset}><Save size={14}/></button></div>
       {saved.length>0&&<select aria-label="载入已保存预设" value="" disabled={playbackLocked} onChange={e=>{const p=saved[Number(e.target.value)];if(p)try{applySettings(p.settings);}catch{notify('这个预设已失效，请重新保存。');}}}><option value="">载入已保存预设…</option>{saved.map((p,i)=><option key={p.name} value={i}>{p.name}</option>)}</select>}
       <div className="left-bottom"><div className="lab-label"><Activity size={14}/>素材 · 流场 · 关键帧</div><button className="text-link" onClick={()=>setHelp(true)}>查看操作指南 <ChevronRight size={13}/></button></div>
@@ -337,7 +364,7 @@ export default function App() {
         <div className="segmented count-mode"><button disabled={activeRecording} aria-pressed={params.autoCount} className={params.autoCount?'active':''} onClick={()=>changeCountMode(true)}>自动适配设备</button><button disabled={activeRecording} aria-pressed={!params.autoCount} className={!params.autoCount?'active':''} onClick={()=>changeCountMode(false)}>手动数量</button></div>
         <div className={'density-status '+(params.autoCount?'automatic':'')} aria-live="polite"><div><span>主体当前绘制</span><strong>{state.actualCount.toLocaleString()}<small> 个</small></strong></div><p>{params.autoCount?state.adaptiveStatus:'手动控制粒子密度'}</p><div className="density-cap">{params.autoCount?'当前有效上限':'素材采样上限'}<b>{(params.autoCount?state.adaptiveCeiling:asset.count).toLocaleString()}</b></div></div>
         <Range label={params.autoCount?'自动数量上限':'粒子数量'} value={params.count} min={1000} max={MAX_PARTICLES} step={1000} unit="个" disabled={activeRecording&&params.autoCount} onChange={v=>change('count',v)} description={params.autoCount?'自动模式的最大预算；实际数量依据连续渲染帧率调整。':'真实绘制数量，受素材有效采样区域限制。'}/>
-        <div className="layer-counts"><span>外围点<b>{state.ambientCount.toLocaleString()}</b></span><span>细丝条数<b>{state.filamentCount.toLocaleString()}</b></span></div>
+        <div className="layer-counts"><span>外围点<b>{state.ambientCount.toLocaleString()}</b></span><span>短尾路径<b>{state.filamentCount.toLocaleString()} 组</b></span></div>
         <p className="control-hint">{activeRecording&&params.autoCount?'录制期间固定自动数量；停止并生成视频后恢复设备评估。':params.autoCount?'从 30,000 个主体点起步，按实际流畅度增减。上限是预算，外围点和细丝另计；500,000 个不保证每台设备流畅。':'直接设置实际绘制数量；素材有效像素或表面容量不足时，以采样上限为准。'}</p>
       </div>
       <div className="param-group petal-controls"><div className="group-heading"><span><Layers3 size={14}/>表面与外围微流</span></div>
@@ -363,7 +390,7 @@ export default function App() {
         {effect==='wave'&&<Range label="传播节奏" value={params.waveRhythm} min={.3} max={3} step={.05} unit="×" onChange={v=>change('waveRhythm',v)}/>}
         {effect==='erosion'&&<><Range label="侵蚀强度" value={params.erosion} min={0} max={1} step={.01} onChange={v=>change('erosion',v)} description="控制各区域消散节奏和局部孔洞。"/><Range label="流场尺度" value={params.flowScale} min={.3} max={5} step={.05} unit="×" onChange={v=>change('flowScale',v)}/><Range label="拉丝强度" value={params.stringiness} min={0} max={3} step={.05} unit="×" onChange={v=>change('stringiness',v)}/></>}
         {effect==='erosion'&&<Range label="卷曲力度" value={params.curl} min={0} max={3} step={.05} unit="×" onChange={v=>change('curl',v)} description="控制流场侵蚀中相邻粒子沿连续卷曲流线展开的力度。"/>}
-        <Range label="短拖尾长度" value={params.trail} min={0} max={1} step={.01} onChange={v=>change('trail',v)} description="0关闭；沿同一流场采样细轨迹，聚合时消失。"/><Toggle label="末段平滑淡出" on={params.fade} onChange={()=>change('fade',!params.fade)}/>
+        <Range label="短拖尾长度" value={params.trail} min={0} max={1} step={.01} onChange={v=>change('trail',v)} description="0关闭；沿粒子运动方向生成短点状尾迹，聚合时消失。"/><Toggle label="末段平滑淡出" on={params.fade} onChange={()=>change('fade',!params.fade)}/>
       </div>
       <div className="param-group output-controls"><div className="group-heading"><span><Focus size={14}/>输出画面</span></div><div className="segmented resolution-mode">{(['720p','1080p'] as const).map(resolution=><button key={resolution} disabled={activeRecording} aria-pressed={params.resolution===resolution} className={params.resolution===resolution?'active':''} onClick={()=>change('resolution',resolution)}>{resolution.toUpperCase()}</button>)}</div><p className="control-hint">{outputSize} 实际像素，预览、截图与录像使用同一画布。{activeRecording?'录制结束前保持尺寸。':'1080p 更清晰，也需要更多图形性能。'}</p></div>
       <div className="param-group"><div className="group-heading"><span><Image size={14}/>粒子外观</span><button title="重置外观" aria-label="重置外观" onClick={()=>reset(['size','color','opacity','glow','colorMode','exposure','contrast','sparkle'])}><RotateCcw size={12}/></button></div>
@@ -382,7 +409,7 @@ export default function App() {
       {record.result&&<div className="result-actions"><button className="secondary" onClick={()=>setVideoOpen(true)}><Play size={14}/>预览视频</button><button className="secondary" onClick={()=>recorder.current?.download()}><ArrowDownToLine size={14}/>下载</button></div>}
       <p className="record-note">空格只暂停动画，录制仍继续。暂停录制会同时冻结动画，恢复后延续原状态。录制中可调参数与视角，素材替换被锁定。</p><div className="record-limits"><span>上限 120 秒</span><span>200 MB</span><span>{(record.bytes/1024/1024).toFixed(1)} MB</span></div>{!supported&&<p className="warning">当前浏览器不支持画布录制，请使用支持 MediaRecorder 的桌面浏览器。</p>}
     </div>}</div></aside>
-    <footer className="timeline-workspace"><div className="timeline-status"><span><i className={state.running?'playing':''}/>{state.running?(state.playbackSource==='timeline'?'关键帧播放中':'自由聚散中'):(state.playbackSource==='timeline'?'时间轴已暂停':'自由聚散已暂停')}<kbd>Space</kbd>播放 / 暂停</span><span>{current.name}<b>主体 {state.actualCount.toLocaleString()} · 外围 {state.ambientCount.toLocaleString()} · 细丝 {state.filamentCount.toLocaleString()} 条</b><em>{!state.running&&!params.autoRotate&&record.status!=='recording'?'静止 · 按需渲染':Math.round(state.fps)+' FPS'}</em></span></div>
+    <footer className="timeline-workspace"><div className="timeline-status"><span><i className={state.running?'playing':''}/>{state.running?(state.playbackSource==='timeline'?'关键帧播放中':'自由聚散中'):(state.playbackSource==='timeline'?'时间轴已暂停':'自由聚散已暂停')}<kbd>Space</kbd>播放 / 暂停</span><span>{current.name}<b>主体 {state.actualCount.toLocaleString()} · 外围 {state.ambientCount.toLocaleString()} · 短尾 {state.filamentCount.toLocaleString()} 组</b><em>{!state.running&&!params.autoRotate&&record.status!=='recording'?'静止 · 按需渲染':Math.round(state.fps)+' FPS'}</em></span></div>
       {petalTiming&&<div className="petal-phase-line"><Sparkles size={11}/><span>预设阶段：{state.playbackSource==='timeline'?petalPhaseAt(state.timelineTime,petalTiming):'自由形态编辑'}</span><small>独立消散 / 聚合时长在右侧调整 · 时间轴以秒计</small></div>}
       <TimelinePanel clip={clip} time={state.timelineTime} playing={state.running&&state.playbackSource==='timeline'} loop={state.timelineLoop} currentSample={currentSample} getCurrentFrame={()=>({time:engine.current?.state.timelineTime??state.timelineTime,sample:engine.current?.currentSample??currentSample})} onClipChange={changeClip} onSeek={t=>engine.current?.seekTimeline(t)} onTogglePlay={()=>{const e=engine.current;if(e)e.setTimelinePlaying(!(e.state.running&&e.state.playbackSource==='timeline'));}} onLoopChange={v=>engine.current?.setTimelineLoop(v)} disabled={!engineReady||playbackLocked}/>
     </footer>
@@ -394,6 +421,7 @@ export default function App() {
       {importState.status==='error'&&<div className="import-error" role="alert"><strong>未能导入 {importState.name}</strong><p>{importState.error}</p><small>原有素材已保留，可重新选择文件。</small></div>}
       <div className="import-formats"><div><Image size={18}/><b>图片</b><p>保留宽高比和原色。透明区域自动过滤；JPG 保留背景。</p></div><div><Box size={18}/><b>静态 3D 模型</b><p>GLB 多网格表面采样。支持基色、顶点色与基础色贴图。</p></div></div>
       <div className="example-heading"><span>先试试示例</span><small>无需准备文件</small></div><div className="example-grid"><div><button disabled={activeRecording} onClick={()=>example('/examples/color-flower.png','color-flower.png')}><img src="/examples/color-flower.png" alt="粉色花瓣与黄色花蕊的透明花朵"/><span><b>彩色花朵</b><small>透明 PNG / 原色粒子</small></span><ArrowUpRight size={17}/></button><a href="/examples/color-flower.png" download>下载图片 <ArrowDownToLine size={12}/></a></div><div><button disabled={activeRecording} onClick={()=>example('/examples/sample-sphere.glb','sample-sphere.glb')}><span className="model-example"><Box size={33}/></span><span><b>三维组合</b><small>GLB / 多网格与颜色</small></span><ArrowUpRight size={17}/></button><a href="/examples/sample-sphere.glb" download>下载模型 <ArrowDownToLine size={12}/></a></div></div>
+      <div className="reference-example lily-example"><button disabled={activeRecording||importBusy} onClick={loadWhiteLilyDemo}><img src="/examples/white-lily-preview-front.png" alt="参考照片制作的白百合立体近似"/><span><b>白百合 · 自然风蚀</b><small>白色花瓣 / 淡绿花心与棕色花药 / 36 秒渐隐回环</small></span><Play size={17}/></button><a href="/examples/white-lily-model.glb" download="Particle_White_Lily.glb">下载白百合 GLB 模型 <ArrowDownToLine size={13}/></a><a href="/examples/white-lily-reference.png" download="White_Lily_Reference.png">下载白百合参考图 <ArrowDownToLine size={13}/></a></div>
       <div className="reference-example petal-example"><button disabled={activeRecording||importBusy} onClick={loadPetalDemo}><img src="/examples/petal-preview-front.png" alt="粉色花瓣和橙黄色花心的立体花朵"/><span><b>花瓣微流 · 立体花朵</b><small>三维表面 / 稀疏外围 / 36 秒渐隐回环</small></span><Play size={17}/></button><a href="/examples/petal-model.glb" download="Particle_Petal.glb">下载花瓣 GLB 模型 <ArrowDownToLine size={13}/></a></div>
       <div className="reference-example ding-example"><button disabled={activeRecording||importBusy} onClick={loadDingDemo}><img src="/examples/ding-reference.jpg" alt="青铜方鼎正视参考图"/><span><b>青铜方鼎 · 三维粒子展示</b><small>青铜原色 / 四足双耳 / 16 秒聚散动画</small></span><Play size={17}/></button><a href="/examples/ding-model.glb" download="Bronze_Ding.glb">下载青铜方鼎 GLB <ArrowDownToLine size={13}/></a></div>
       <div className="reference-example lily-example"><button disabled={activeRecording} onClick={loadLilyDemo}><img src="/examples/lily-reference.jpg" alt="用于彩色百合模型的参考照片"/><span><b>你的百合 · 彩色 3D 模型</b><small>参考照片的立体近似 · 原色 / 12 秒动画</small></span><Play size={17}/></button><a href="/examples/lily-model.glb" download="Particle_Lily.glb">下载彩色 GLB 模型 <ArrowDownToLine size={13}/></a></div>
