@@ -2,11 +2,10 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import * as THREE from 'three';
 import { createRequire } from 'node:module';
-import { dirname } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 const require = createRequire(import.meta.url);
-const bundler = require.resolve('esbuild', { paths: [dirname(require.resolve('vite/package.json'))] });
+const bundler = require.resolve('esbuild');
 const { build } = await import(pathToFileURL(bundler).href);
 
 // Bundle the real class, then exercise its public editing APIs without needing

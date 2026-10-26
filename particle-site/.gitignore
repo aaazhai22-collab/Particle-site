@@ -1,6 +1,9 @@
 node_modules/
 .pnpm-store/
 dist/
+.next/
+out/
+next-env.d.ts
 *.tsbuildinfo
 __pycache__/
 .sites-local/

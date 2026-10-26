@@ -1,11 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
-import { dirname } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 const require = createRequire(import.meta.url);
-const bundler = require.resolve('esbuild', { paths: [dirname(require.resolve('vite/package.json'))] });
+const bundler = require.resolve('esbuild');
 const { build } = await import(pathToFileURL(bundler).href);
 const bundled = await build({ entryPoints: ['src/ParticlePostProcessing.ts'], bundle: true, write: false,
   platform: 'node', format: 'esm', target: 'es2022', logLevel: 'silent' });

@@ -14,7 +14,7 @@
 
 ## 启动预览
 
-在项目目录 `D:\azheng-codex\codex-Website` 打开终端。安装依赖后启动：
+在仓库的 `particle-site` 目录打开终端。安装依赖后启动：
 
 ```powershell
 pnpm install
@@ -26,7 +26,7 @@ pnpm dev
 如果电脑使用 npm，也可运行 `npm install` 与 `npm run dev`。已经安装依赖且可以直接使用 Node.js 时，可以绕过包管理器启动同一预览：
 
 ```powershell
-node node_modules/vite/bin/vite.js --host 127.0.0.1
+node node_modules/next/dist/bin/next dev --hostname 127.0.0.1 --port 5173
 ```
 
 生产构建与本地查看构建结果：
@@ -36,7 +36,7 @@ pnpm build
 pnpm preview
 ```
 
-构建命令包含 TypeScript 检查，静态输出位于 `dist/`。本地查看构建结果时，以终端显示的 URL 为准。
+构建命令包含 TypeScript 检查，静态输出位于 `out/`。本地查看构建结果时，以终端显示的 URL 为准。
 
 ## 操作方法
 
@@ -105,4 +105,4 @@ TypeScript 与生产构建通过，14 个 Node 测试通过；播放、手动进
 - [开发进展、配置与验证结果](docs/PROGRESS.md)
 - [验收记录](docs/ACCEPTANCE.md)
 
-技术栈：React、TypeScript、Vite、Three.js；GPU shader 批量绘制粒子；OrbitControls 控制视角；`canvas.captureStream()` 与 `MediaRecorder` 负责本地录像。
+技术栈：Next.js 静态导出、React、TypeScript、Three.js；GPU shader 批量绘制粒子；OrbitControls 控制视角；`canvas.captureStream()` 与 `MediaRecorder` 负责本地录像。

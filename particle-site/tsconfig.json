@@ -1,10 +1,42 @@
 {
   "compilerOptions": {
-    "target": "ES2022", "useDefineForClassFields": true,
-    "lib": ["ES2022", "DOM", "DOM.Iterable"], "module": "ESNext",
-    "skipLibCheck": true, "moduleResolution": "Bundler", "resolveJsonModule": true,
-    "allowImportingTsExtensions": true, "isolatedModules": true, "verbatimModuleSyntax": true,
-    "noEmit": true, "jsx": "react-jsx", "strict": true
+    "target": "ES2022",
+    "useDefineForClassFields": true,
+    "lib": [
+      "ES2022",
+      "DOM",
+      "DOM.Iterable"
+    ],
+    "module": "ESNext",
+    "skipLibCheck": true,
+    "moduleResolution": "Bundler",
+    "resolveJsonModule": true,
+    "allowImportingTsExtensions": true,
+    "isolatedModules": true,
+    "verbatimModuleSyntax": true,
+    "noEmit": true,
+    "jsx": "react-jsx",
+    "strict": true,
+    "esModuleInterop": true,
+    "incremental": true,
+    "forceConsistentCasingInFileNames": true,
+    "plugins": [
+      {
+        "name": "next"
+      }
+    ],
+    "allowJs": true
   },
-  "include": ["src"]
+  "include": [
+    "next-env.d.ts",
+    "src/**/*.ts",
+    "src/**/*.tsx",
+    ".next/types/**/*.ts",
+    ".next/dev/types/**/*.ts"
+  ],
+  "exclude": [
+    "node_modules",
+    "out",
+    "dist"
+  ]
 }
