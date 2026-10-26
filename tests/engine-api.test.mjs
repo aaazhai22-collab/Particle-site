@@ -51,8 +51,11 @@ function editingEngine(options = {}) {
     geometry: new THREE.BufferGeometry(), trailGeometry: new THREE.InstancedBufferGeometry(),
     particleTrailGeometry: new THREE.InstancedBufferGeometry(), particleTrails: {},
     ambientGeometry: new THREE.BufferGeometry(), points: {}, trails: {}, ambientPoints: {}, material: { uniforms },
-    renderer: { calls: 0, render() { this.calls++; } },
-    controls: Object.assign(new THREE.EventDispatcher(), { update: () => false }),
+    canvas: { width: 1280, height: 720, style: {} }, container: { clientWidth: 1280, clientHeight: 720 },
+    renderWidth: 1280, renderHeight: 720, captureSize: null, previewQuality: 'smooth',
+    offlineActive: false, offlineRestore: null, graphicsLost: false,
+    renderer: { calls: 0, render() { this.calls++; }, setSize(width, height) { engine.canvas.width = width; engine.canvas.height = height; } },
+    controls: Object.assign(new THREE.EventDispatcher(), { update: () => false, target: new THREE.Vector3(), enabled: true, autoRotate: false }),
     object: new THREE.Group(), camera: new THREE.PerspectiveCamera(),
     clip: { duration: 6, keyframes: [
       { id: 'a', time: 0, scale: 1, rotation: [0, 0, 0], progress: 0 },
@@ -765,3 +768,130 @@ test('saved crystal parameters restore through the real API and old presets clea
   assert.equal(engine.params.grainStyle, false);
   assert.equal(engine.material.uniforms.uGrainStyle.value, 0);
 });
+
+function exportEnvironment(run) {
+  const keys = ['document', 'window', 'requestAnimationFrame', 'cancelAnimationFrame'];
+  const saved = keys.map(key => [key, Object.getOwnPropertyDescriptor(globalThis, key)]);
+  const events = { scheduled: 0, canceled: [] };
+  Object.assign(globalThis, {
+    document: { hidden: false }, window: { devicePixelRatio: 2 },
+    requestAnimationFrame: () => ++events.scheduled,
+    cancelAnimationFrame: id => events.canceled.push(id),
+  });
+  try { run(events); } finally {
+    for (const [key, descriptor] of saved) {
+      if (descriptor) Object.defineProperty(globalThis, key, descriptor);
+      else delete globalThis[key];
+    }
+  }
+}
+
+test('preview matches display pixels and capture dimensions survive resize with the HDR graph', () => exportEnvironment(() => {
+  const engine = editingEngine();
+  const sizes = [];
+  engine.postProcessing.setSize = (width, height) => sizes.push([width, height]);
+  engine.container.clientWidth = 1600;
+  engine.container.clientHeight = 900;
+  engine.setPreviewQuality('smooth');
+  assert.deepEqual(engine.outputSize, { width: 1920, height: 1080 });
+  engine.setPreviewQuality('sharp');
+  assert.deepEqual(engine.outputSize, { width: 2560, height: 1440 });
+  assert.equal(engine.material.uniforms.uOutputScale.value, 2);
+  engine.setCaptureSize(3840, 2160);
+  engine.container.clientWidth = 640;
+  engine.container.clientHeight = 360;
+  engine.resize();
+  assert.deepEqual(engine.outputSize, { width: 3840, height: 2160 });
+  assert.equal(engine.canvas.style.width, '640px');
+  assert.equal(engine.material.uniforms.uOutputScale.value, 3);
+  engine.setCaptureSize(null);
+  assert.deepEqual(engine.outputSize, { width: 1280, height: 720 });
+  assert.deepEqual(sizes, [[1920, 1080], [2560, 1440], [3840, 2160], [1280, 720]]);
+  assert.throws(() => engine.setCaptureSize(NaN, 1080), /分辨率/);
+  assert.throws(() => engine.setCaptureSize(1920, Infinity), /分辨率/);
+}));
+
+test('offline export renders full configured density on an exact clock, then restores adaptive preview, camera and layers', () => exportEnvironment(events => {
+  const engine = editingEngine({ auto: true, count: 300000, capacity: 500000 });
+  engine.setParams({ playbackRate: 2, petalFlow: true, surfaceMode: true, autoRotate: true });
+  engine.effect = 'erosion';
+  engine.updateCount();
+  engine.seekTimeline(1.5);
+  engine.render();
+  const sizes = [];
+  engine.postProcessing.setSize = (width, height) => sizes.push([width, height]);
+  engine.requestId = 52;
+  const before = engine.state;
+  const controller = engine.adaptive;
+  const adaptiveState = controller.state;
+  const pose = engine.currentSample;
+  const camera = engine.camera.position.clone();
+  const quaternion = engine.camera.quaternion.clone();
+  const target = engine.controls.target.clone();
+  const visible = [engine.points.visible, engine.trails.visible, engine.particleTrails.visible, engine.ambientPoints.visible];
+  const layerCounts = [engine.geometry.drawRange.count, engine.trailGeometry.instanceCount, engine.particleTrailGeometry.instanceCount, engine.ambientGeometry.drawRange.count];
+  const session = engine.beginOfflineExport(3840, 2160, 60);
+  assert.equal(session.duration, 3);
+  assert.equal(session.canvas, engine.canvas);
+  assert.deepEqual(engine.outputSize, { width: 3840, height: 2160 });
+  assert.equal(engine.state.actualCount, 300000);
+  assert.equal(engine.geometry.drawRange.count, 300000);
+  assert.equal(engine.adaptive.state.status, 'frozen');
+  assert.deepEqual(events.canceled, [52]);
+  engine.scheduleFrame();
+  assert.equal(events.scheduled, 0);
+  engine.setParams({ count: 1000, glow: 0 });
+  engine.seekTimeline(5);
+  engine.setTimeline({ duration: 30, keyframes: [] });
+  assert.equal(engine.params.count, 300000, 'UI edits cannot alter an in-progress export');
+  session.renderFrame(1.25);
+  assert.equal(engine.state.timelineTime, 2.5);
+  assert.equal(engine.material.uniforms.uTime.value, 2.5);
+  assert.equal(engine.material.uniforms.uTimelineTime.value, 2.5);
+  assert.equal(engine.material.uniforms.uOutputScale.value, 3);
+  assert.equal(engine.state.ambientCount > before.ambientCount, true);
+  assert.notDeepEqual(engine.camera.position, camera);
+  const sampled = engine.currentSample;
+  session.renderFrame(.1);
+  session.renderFrame(1.25);
+  assert.deepEqual(engine.currentSample, sampled, 'frame order and render speed never change the pose');
+  engine.container.clientWidth = 800;
+  engine.resize();
+  assert.deepEqual(engine.outputSize, { width: 3840, height: 2160 });
+  session.restore();
+  assert.deepEqual(engine.state, before);
+  assert.deepEqual(engine.currentSample, pose);
+  assert.deepEqual(engine.camera.position, camera);
+  assert.deepEqual(engine.camera.quaternion.toArray(), quaternion.toArray());
+  assert.deepEqual(engine.controls.target, target);
+  assert.equal(engine.controls.enabled, true);
+  assert.equal(engine.adaptive, controller);
+  assert.deepEqual(controller.state, adaptiveState);
+  assert.deepEqual(engine.outputSize, { width: 1280, height: 720 });
+  assert.deepEqual([engine.geometry.drawRange.count, engine.trailGeometry.instanceCount, engine.particleTrailGeometry.instanceCount, engine.ambientGeometry.drawRange.count], layerCounts);
+  assert.deepEqual([engine.points.visible, engine.trails.visible, engine.particleTrails.visible, engine.ambientPoints.visible], visible);
+  assert.deepEqual(sizes, [[3840, 2160], [1280, 720]]);
+  assert.equal(events.scheduled, 1);
+  session.restore();
+  assert.equal(events.scheduled, 1, 'restoration is idempotent');
+  assert.throws(() => session.renderFrame(0), /会话已结束/);
+}));
+
+test('offline export blocks invalid/concurrent sessions and context loss aborts frames without redrawing a broken device', () => exportEnvironment(() => {
+  const engine = editingEngine();
+  assert.throws(() => engine.beginOfflineExport(9000, 1080, 60), /分辨率/);
+  assert.throws(() => engine.beginOfflineExport(1920, 1080, 0), /帧率/);
+  engine.recordingLocked = true;
+  assert.throws(() => engine.beginOfflineExport(1920, 1080, 60), /正在录制/);
+  engine.recordingLocked = false;
+  const session = engine.beginOfflineExport(1920, 1080, 60);
+  assert.throws(() => engine.beginOfflineExport(1920, 1080, 60), /正在录制或导出/);
+  assert.throws(() => session.renderFrame(NaN), /时间无效/);
+  engine.graphicsLost = true;
+  assert.throws(() => session.renderFrame(0), /图形设备中断/);
+  const draws = engine.renderer.calls;
+  session.restore();
+  assert.equal(engine.renderer.calls, draws);
+  assert.equal(engine.state.running, false);
+  assert.equal(engine.offlineActive, false);
+}));

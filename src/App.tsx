@@ -5,6 +5,8 @@ import { ParticleEngine, DEFAULT_PARAMS } from './ParticleEngine';
 import type { ParticleParams, Effect, EngineState } from './ParticleEngine';
 import { CanvasRecorder } from './CanvasRecorder';
 import type { RecorderState } from './CanvasRecorder';
+import type { RecordingResult } from './CanvasRecorder';
+import { exportTimelineVideo, isHDVideoExportSupported, getExportBitrate } from './HDVideoExporter';
 import { createSphereAsset, loadParticleAsset } from './assets';
 import type { ParticleAsset } from './assets';
 import { LatestImport } from './importQueue';
@@ -91,6 +93,11 @@ export default function App() {
   const engine=useRef<ParticleEngine|null>(null), recorder=useRef<CanvasRecorder|null>(null);
   const imports=useRef(new LatestImport()), countTimer=useRef<ReturnType<typeof setTimeout>|null>(null), priorRunning=useRef(false);
   const autoCeiling=useRef(DEFAULT_PARAMS.count);
+  const exportAbort=useRef<AbortController|null>(null), exportResultRef=useRef<RecordingResult|null>(null);
+  const [exportBusy,setExportBusy]=useState(false), [exportProgress,setExportProgress]=useState(0), [exportError,setExportError]=useState('');
+  const [exportResult,setExportResult]=useState<RecordingResult|null>(null), [videoSource,setVideoSource]=useState<'export'|'record'>('record');
+  const [resolution,setResolution]=useState<'1080'|'2160'>('1080'), [exportFps,setExportFps]=useState<30|60>(60);
+  const [previewQuality,setPreviewQuality]=useState<'smooth'|'sharp'>('smooth'), [renderSize,setRenderSize]=useState({width:1920,height:1080});
   const [params,setParams]=useState<ParticleParams>({...DEFAULT_PARAMS}), [state,setState]=useState(initialState), [effect,setEffect]=useState<Effect>('radial');
   const [clip,setClip]=useState<AnimationClip>(()=>normalizeClip(DEFAULT_CLIP)), [asset,setAsset]=useState<AssetInfo>({name:'粒子球体',kind:'sphere',count:MAX_PARTICLES,hasOriginalColors:false,notes:[]});
   const [petalTiming,setPetalTiming]=useState<PetalTiming|null>(null);
@@ -99,24 +106,28 @@ export default function App() {
   const [importOpen,setImportOpen]=useState(false), [importState,setImportState]=useState<ImportState>({status:'idle',name:'',error:''}), [dragging,setDragging]=useState(false);
   const [quality,setQuality]=useState<'standard'|'high'>('high'), [supported,setSupported]=useState(false), [codec,setCodec]=useState(''), [engineError,setEngineError]=useState('');
   const [presetName,setPresetName]=useState(''), [saved,setSaved]=useState<SavedPreset[]>(()=>{try{const a=JSON.parse(localStorage.getItem(STORAGE_KEY)||'[]');return Array.isArray(a)?a.filter(p=>typeof p.name==='string'&&p.settings).slice(0,30):[];}catch{return [];}});
-  const activeRecording=['recording','paused','processing'].includes(record.status), importBusy=importState.status==='loading';
-  const engineReady=!!engine.current&&!engineError, playbackLocked=record.status==='paused'||record.status==='processing';
+  const realtimeRecording=['recording','paused','processing'].includes(record.status);
+  const activeRecording=realtimeRecording||exportBusy, importBusy=importState.status==='loading';
+  const engineReady=!!engine.current&&!engineError, playbackLocked=exportBusy||record.status==='paused'||record.status==='processing';
+  const outputWidth=resolution==='2160'?3840:1920, outputHeight=resolution==='2160'?2160:1080;
+  const videoResult=videoSource==='export'?exportResult:record.result;
   const notify=(message:string)=>setToast(message);
   useEffect(()=>{if(!toast)return;const t=setTimeout(()=>setToast(''),5000);return()=>clearTimeout(t);},[toast]);
   useEffect(()=>{
     if(!stageRef.current)return; imports.current=new LatestImport(); let alive=true; let instance:ParticleEngine;
     try {
-      instance=new ParticleEngine(stageRef.current,s=>{if(alive){setState({...s});if(instance)setEffect(instance.effect);}},msg=>{if(alive)setEngineError(msg);});
+      instance=new ParticleEngine(stageRef.current,s=>{if(alive){setState({...s});if(instance){setEffect(instance.effect);const size=instance.outputSize;setRenderSize(old=>old.width===size.width&&old.height===size.height?old:size);}}},msg=>{if(alive)setEngineError(msg);});
       engine.current=instance; instance.setTimeline(normalizeClip(DEFAULT_CLIP)); instance.setTimelineLoop(true); instance.setTimelinePlaying(true);
-      const r=new CanvasRecorder(instance.canvas,s=>{if(alive){instance.setRecordingLocked(['recording','paused','processing'].includes(s.status));instance.setCaptureActive(s.status==='recording');setRecord({...s});if(recorder.current)setCodec(recorder.current.mimeType);if(s.status==='ready')setVideoOpen(true);if(s.error)setToast(s.error);}},paused=>{if(paused){priorRunning.current=instance.state.running;instance.setRunning(false);}else{instance.setRunning(priorRunning.current);}});
+      const r=new CanvasRecorder(instance.canvas,s=>{if(alive){instance.setRecordingLocked(['recording','paused','processing'].includes(s.status));instance.setCaptureActive(s.status==='recording');if(!['recording','paused','processing'].includes(s.status))instance.setCaptureSize(null);setRecord({...s});if(recorder.current)setCodec(recorder.current.mimeType);if(s.status==='ready'){setVideoSource('record');setVideoOpen(true);}if(s.error)setToast(s.error);}},paused=>{if(paused){priorRunning.current=instance.state.running;instance.setRunning(false);}else{instance.setRunning(priorRunning.current);}});
       recorder.current=r; setSupported(r.supported); setCodec(r.mimeType);
-      loadWhiteLilyDemo();
+      loadUploadedDemo();
     } catch(error) { setEngineError('预览初始化失败：'+(error instanceof Error?error.message:'请使用支持 WebGL 的桌面浏览器。')); }
-    return()=>{alive=false;imports.current.dispose();if(countTimer.current)clearTimeout(countTimer.current);recorder.current?.destroy();engine.current?.destroy();};
+    return()=>{alive=false;exportAbort.current?.abort();if(exportResultRef.current)URL.revokeObjectURL(exportResultRef.current.url);imports.current.dispose();if(countTimer.current)clearTimeout(countTimer.current);recorder.current?.destroy();engine.current?.destroy();};
   },[]);
   useEffect(()=>{const handler=()=>{if(!document.fullscreenElement)setPresentation(false);};document.addEventListener('fullscreenchange',handler);return()=>document.removeEventListener('fullscreenchange',handler);},[]);
   useEffect(()=>{
     const key=(e:KeyboardEvent)=>{
+      if(exportBusy)return;
       if(e.key==='Escape'){setHelp(false);setImportOpen(false);setVideoOpen(false);setPresentation(false);return;}
       if(e.ctrlKey||e.metaKey||e.altKey)return;
       if((e.target as HTMLElement)?.closest('input:not([type="range"]),textarea,select,[contenteditable="true"]'))return;
@@ -126,7 +137,7 @@ export default function App() {
       if(e.key.toLowerCase()==='r')engine.current?.resetView();
     };
     window.addEventListener('keydown',key);return()=>window.removeEventListener('keydown',key);
-  },[help,videoOpen,importOpen,playbackLocked]);
+  },[help,videoOpen,importOpen,playbackLocked,exportBusy]);
   const change=<K extends keyof ParticleParams>(key:K,value:ParticleParams[K])=>{
     const locked=['recording','paused','processing'].includes(recorder.current?.state.status??record.status);
     if(locked&&(key==='resolution'||(key==='count'&&params.autoCount)))return;
@@ -217,6 +228,19 @@ export default function App() {
   };
   const chooseFiles=(files:FileList|null)=>{if(!files?.length)return;const file=files[files.length-1];runImport(file.name,()=>loadParticleAsset(file));};
   const example=(url:string,name:string)=>runImport(name,async()=>{const response=await fetch(url);if(!response.ok)throw new Error('示例素材读取失败，请稍后重试。');return loadParticleAsset(new File([await response.blob()],name));});
+  const loadUploadedDemo=()=>runImport('百合花束.glb',async()=>{
+    const response=await fetch('/examples/uploaded-model.glb');
+    if(!response.ok)throw new Error('百合花束读取失败，请重试或导入你提供的原始 GLB。');
+    const next=await loadParticleAsset(new File([await response.blob()],'百合花束.glb',{type:'model/gltf-binary'}));
+    return {...next,thumbnail:'/examples/uploaded-model-preview.jpg',notes:['来自你提供的 GLB · 双朵百合与完整茎叶。','原色三维粒子 · 可旋转观察与编辑动画。',...next.notes]};
+  },()=>{
+    const e=engine.current;if(!e)return;
+    if(countTimer.current){clearTimeout(countTimer.current);countTimer.current=null;}
+    e.setParams({...WHITE_LILY_PARAMS,petalFlow:false,grainStyle:false,colorMode:'original',autoCount:true,count:300000,glow:.18,trail:.12,sparkle:.02,exposure:1.25});
+    autoCeiling.current=e.params.count;setParams(e.params);setPetalTiming({...WHITE_LILY_TIMING});
+    e.setTimeline(WHITE_LILY_CLIP);e.seekTimeline(0);e.setEffect('erosion');e.fitView('full');e.setTimelineLoop(true);e.setTimelinePlaying(true);
+    setEffect('erosion');setClip(normalizeClip(WHITE_LILY_CLIP));notify('你的百合花束已载入：原色三维展示，36 秒聚散循环。');
+  });
   const loadWhiteLilyDemo=()=>runImport('白百合自然风蚀示例.glb',async()=>{
     const response=await fetch('/examples/white-lily-model.glb');
     if(!response.ok)throw new Error('白百合模型暂时无法读取，当前场景已保留，请重试或导入本地 GLB。');
@@ -324,32 +348,47 @@ export default function App() {
     try{localStorage.setItem(STORAGE_KEY,JSON.stringify(next));setSaved(next);setPresetName('');notify('已保存「'+name+'」，包含效果、参数和关键帧。');}catch{notify('浏览器本地存储不可用，请导出 JSON 保存。');}
   };
   const screenshot=async()=>{try{const e=engine.current,width=e?.canvas.width,height=e?.canvas.height,blob=await e?.screenshot();if(blob){download(blob,'Particle_'+safeName(asset.name)+'_'+Date.now()+'.png');notify('已导出 '+width+' × '+height+' PNG。');}}catch{notify('截图失败，请稍后重试。');}};
-  const startRecording=()=>{
+  const startRealtimeRecording=()=>{
     if(activeRecording)return;
     if(countTimer.current){clearTimeout(countTimer.current);countTimer.current=null;engine.current?.setParams({count:params.count});}
-    recorder.current?.setProjectName(asset.name);recorder.current?.start(quality);
+    engine.current?.setCaptureSize(1920,1080);recorder.current?.setProjectName(asset.name);recorder.current?.start(quality,{width:1920,height:1080,fps:60});
   };
+  const startHDExport=async()=>{
+    const e=engine.current;if(!e||activeRecording||importBusy||exportAbort.current)return;
+    if(countTimer.current){clearTimeout(countTimer.current);countTimer.current=null;}e.setParams({count:params.count});
+    const controller=new AbortController();exportAbort.current=controller;setExportBusy(true);setExportProgress(0);setExportError('');
+    try{
+      if(!isHDVideoExportSupported())throw new Error('当前浏览器不支持高清逐帧导出，请使用最新版 Chrome 或 Edge。');
+      const result=await exportTimelineVideo(e.beginOfflineExport(outputWidth,outputHeight,exportFps),{width:outputWidth,height:outputHeight,fps:exportFps,quality,projectName:asset.name,signal:controller.signal},setExportProgress);
+      if(controller.signal.aborted){URL.revokeObjectURL(result.url);return;}
+      if(exportResultRef.current)URL.revokeObjectURL(exportResultRef.current.url);
+      exportResultRef.current=result;setExportResult(result);setVideoSource('export');setVideoOpen(true);notify('高清视频已生成，可预览和下载。');
+    }catch(error){if(!controller.signal.aborted)setExportError(error instanceof Error?error.message:'视频导出失败，请重试。');}
+    finally{exportAbort.current=null;setExportBusy(false);}
+  };
+  const downloadVideo=(result:RecordingResult)=>download(result.blob,result.filename);
   const fullscreen=async()=>{if(presentation){if(document.fullscreenElement)await document.exitFullscreen();setPresentation(false);}else{setPresentation(true);try{await workspaceRef.current?.requestFullscreen();}catch{notify('已切换展示布局，按 Esc 退出。');}}};
   const current=EFFECTS.find(item=>item.id===effect)??EFFECTS[0];
   const currentSample=engine.current?.currentSample??{...sampleClip(clip,state.timelineTime),progress:state.progress};
   const outputSize=params.resolution==='1080p'?'1920 × 1080':'1280 × 720';
   const petalStages=petalTiming?getPetalStages(petalTiming):null;
 
-  return <div className={'app '+(presentation?'presentation':'')+(petalTiming?' petal-workspace':'')} ref={workspaceRef} onDragOver={e=>{if(e.dataTransfer.types.includes('Files'))e.preventDefault();}} onDrop={e=>{if(e.dataTransfer.files.length){setImportOpen(true);dropFiles(e);}}}>
+  return <div className={'app '+(presentation?'presentation':'')+(petalTiming?' petal-workspace':'')} ref={workspaceRef} onDragOver={e=>{if(e.dataTransfer.types.includes('Files'))e.preventDefault();}} onDrop={e=>{if(exportBusy){e.preventDefault();return;}if(e.dataTransfer.files.length){setImportOpen(true);dropFiles(e);}}}>
     <input ref={fileRef} type="file" className="hidden-file" aria-label="选择素材文件" accept=".png,.jpg,.jpeg,.glb" onChange={e=>{chooseFiles(e.target.files);e.target.value='';}}/>
     <input ref={jsonRef} type="file" className="hidden-file" aria-label="选择参数文件" accept=".json,application/json" onChange={e=>{const file=e.target.files?.[0];if(file)void importSettings(file);e.target.value='';}}/>
-    <header className="topbar">
+    <header className="topbar" inert={exportBusy}>
       <a className="brand" href="#" onClick={e=>e.preventDefault()}><span className="brand-mark"><Sparkles size={21}/></span><span>粒子工坊<small>PARTICLE STUDIO</small></span></a>
       <div className="project-name"><span className="project-dot"/><span className="project-file" title={asset.name}>{asset.name}</span><span className="project-separator">/</span><span className="muted">粒子动画工作台</span><span className="version">V0.6</span></div>
       <div className="header-actions"><span className="local-tag"><span/>本地处理</span><button className="icon-button" title="操作说明" aria-label="操作说明" onClick={()=>setHelp(true)}><CircleHelp size={19}/></button><button className="secondary small" disabled={playbackLocked} onClick={()=>jsonRef.current?.click()}><Upload size={14}/>导入参数</button><button className="secondary small" onClick={()=>download(new Blob([JSON.stringify(currentSettings(),null,2)],{type:'application/json'}),'Particle_'+safeName(asset.name)+'_animation.json')}><FileJson size={15}/>导出项目</button></div>
     </header>
-    <aside className="left-panel"><div className="panel-heading"><Layers3 size={16}/><span>素材与效果</span><span className="section-index">01</span></div><div className="side-content">
+    <aside className="left-panel" inert={exportBusy}><div className="panel-heading"><Layers3 size={16}/><span>素材与效果</span><span className="section-index">01</span></div><div className="side-content">
       <div className="eyebrow">当前素材 <span className="mini-status">{asset.kind==='sphere'?'内置':asset.kind==='image'?'图片':'3D 模型'}</span></div>
       <button className="source-card import-source" disabled={activeRecording} onClick={()=>setImportOpen(true)} aria-label="打开素材导入窗口">
         {asset.thumbnail?<div className="asset-thumbnail"><img src={asset.thumbnail} alt="当前素材缩略图"/><span><Upload size={14}/>替换素材</span></div>:<div className="sphere-thumb"><div/><span className="thumb-axis">Y<br/>└ X</span><span className="import-hover"><Upload size={15}/>导入素材</span></div>}
         <div className="source-info"><div>{asset.kind==='image'?<Image size={15}/>:<Box size={15}/>}<strong title={asset.name}>{asset.name}</strong><span className="source-check"><Check size={12}/></span></div><p>{asset.kind==='image'?'IMAGE · 颜色像素采样':asset.kind==='model'?'GLB · 多网格表面采样':'SPHERE · 三维表面采样'}</p></div>
       </button>
       <button className="import-button" disabled={activeRecording||!engineReady} onClick={()=>setImportOpen(true)}>{importBusy?<LoaderCircle className="spin" size={15}/>:<Plus size={15}/>} {importBusy?'正在处理素材':'导入图片 / 3D 模型'}<span>PNG · JPG · GLB</span></button>
+      <button className="petal-demo-button uploaded-demo-button" disabled={activeRecording||importBusy||!engineReady} onClick={loadUploadedDemo}><Box size={14}/><span>你的百合花束<small>导入文件预设 / 原色三维 / 36 秒回环</small></span><Play size={12}/></button>
       <button className="petal-demo-button" disabled={activeRecording||importBusy||!engineReady} onClick={loadWhiteLilyDemo}><Wind size={14}/><span>白百合 · 自然风蚀<small>参考照片的立体近似 / 36 秒回环</small></span><Play size={12}/></button>
       <button className="petal-demo-button" disabled={activeRecording||importBusy||!engineReady} onClick={()=>loadPetalDemo()}><Sparkles size={14}/><span>花瓣微流 · 立体花朵<small>原色 / 1080p / 36 秒回环</small></span><Play size={12}/></button>
       <button className="ding-demo-button" disabled={activeRecording||importBusy||!engineReady} onClick={loadDingDemo}><Box size={14}/>青铜方鼎展示<Play size={12}/></button>
@@ -367,11 +406,11 @@ export default function App() {
       {saved.length>0&&<select aria-label="载入已保存预设" value="" disabled={playbackLocked} onChange={e=>{const p=saved[Number(e.target.value)];if(p)try{applySettings(p.settings);}catch{notify('这个预设已失效，请重新保存。');}}}><option value="">载入已保存预设…</option>{saved.map((p,i)=><option key={p.name} value={i}>{p.name}</option>)}</select>}
       <div className="left-bottom"><div className="lab-label"><Activity size={14}/>素材 · 流场 · 关键帧</div><button className="text-link" onClick={()=>setHelp(true)}>查看操作指南 <ChevronRight size={13}/></button></div>
     </div></aside>
-    <main className="preview"><div className="preview-top"><div><span className="live-dot"/>实时预览 <span className="preview-sub">/ {current.name}</span></div><div className="composition-switch"><button aria-label="完整构图" title="让完整主体进入画面" onClick={()=>engine.current?.fitView('full')}>完整构图</button><button aria-label="细节特写" title="放大主体表面，观察细密粒子" onClick={()=>engine.current?.fitView('macro')}>细节特写</button></div><div className="preview-badges"><span>GPU</span><span>16:9</span></div></div>
-      <div className="canvas-area"><div className="canvas-mount" ref={stageRef}/>{engineError&&<div className="engine-error"><strong>无法启动粒子预览</strong><p>{engineError}</p><p>请开启浏览器硬件加速后刷新。</p></div>}<div className="view-label"><span className="view-cross">+</span>透视视角 <span>{outputSize}</span></div><div className="axis-indicator"><i className="axis-y">Y</i><i className="axis-x">X</i><i className="axis-z">Z</i></div>{activeRecording&&<div className={'record-overlay '+(record.status==='paused'?'paused':'')}><span/>{record.status==='paused'?'录制暂停':record.status==='processing'?'生成视频中':'REC'}<b>{formatTime(record.elapsed)}</b></div>}</div>
+    <main className="preview" inert={exportBusy}><div className="preview-top"><div><span className="live-dot"/>实时预览 <span className="preview-sub">/ {current.name}</span></div><div className="composition-switch"><button aria-label="完整构图" title="让完整主体进入画面" onClick={()=>engine.current?.fitView('full')}>完整构图</button><button aria-label="细节特写" title="放大主体表面，观察细密粒子" onClick={()=>engine.current?.fitView('macro')}>细节特写</button></div><div className="preview-quality" role="group" aria-label="预览清晰度"><button disabled={activeRecording} className={previewQuality==='smooth'?'active':''} onClick={()=>{setPreviewQuality('smooth');engine.current?.setPreviewQuality('smooth');}}>流畅</button><button disabled={activeRecording} className={previewQuality==='sharp'?'active':''} onClick={()=>{setPreviewQuality('sharp');engine.current?.setPreviewQuality('sharp');}}>高清</button></div></div>
+      <div className="canvas-area"><div className="canvas-mount" ref={stageRef}/>{engineError&&<div className="engine-error"><strong>无法启动粒子预览</strong><p>{engineError}</p><p>请开启浏览器硬件加速后刷新。</p></div>}<div className="view-label"><span className="view-cross">+</span>透视视角 <span>{renderSize.width} × {renderSize.height}</span></div><div className="axis-indicator"><i className="axis-y">Y</i><i className="axis-x">X</i><i className="axis-z">Z</i></div>{realtimeRecording&&<div className={'record-overlay '+(record.status==='paused'?'paused':'')}><span/>{record.status==='paused'?'录制暂停':record.status==='processing'?'生成视频中':'REC'}<b>{formatTime(record.elapsed)}</b></div>}</div>
       <div className="preview-bottom"><div className="mouse-help"><span>左键</span>旋转<i>·</i><span>滚轮</span>缩放<i>·</i><span>右键</span>平移</div><div className="view-tools"><button title="重置视角（R）" aria-label="重置视角" onClick={()=>engine.current?.resetView()}><RotateCcw size={16}/></button><button title="适配当前形态" aria-label="适配画面" onClick={()=>engine.current?.fitView()}><Focus size={17}/></button><button title="导出 PNG 截图" aria-label="导出截图" onClick={screenshot}><Camera size={17}/></button><span/><button title="全屏展示" aria-label="全屏展示" onClick={fullscreen}><Maximize2 size={17}/></button></div></div>
     </main>
-    <aside className="right-panel"><div className="right-tabs"><button className={tab==='params'?'active':''} onClick={()=>setTab('params')}><Settings2 size={15}/>参数</button><button className={tab==='record'?'active':''} onClick={()=>setTab('record')}><Circle size={13}/>录制{record.status==='recording'&&<i/>}</button></div><div className="param-scroll">{tab==='params'?<>
+    <aside className="right-panel" inert={exportBusy}><div className="right-tabs"><button className={tab==='params'?'active':''} onClick={()=>setTab('params')}><Settings2 size={15}/>参数</button><button className={tab==='record'?'active':''} onClick={()=>setTab('record')}><Circle size={13}/>导出 / 录制{record.status==='recording'&&<i/>}</button></div><div className="param-scroll">{tab==='params'?<>
       <div className="param-group density-group"><div className="group-heading"><span><Activity size={14}/>密度与设备适配</span><span className="density-priority">流畅优先</span></div>
         <div className="segmented count-mode"><button disabled={activeRecording} aria-pressed={params.autoCount} className={params.autoCount?'active':''} onClick={()=>changeCountMode(true)}>自动适配设备</button><button disabled={activeRecording} aria-pressed={!params.autoCount} className={!params.autoCount?'active':''} onClick={()=>changeCountMode(false)}>手动数量</button></div>
         <div className={'density-status '+(params.autoCount?'automatic':'')} aria-live="polite"><div><span>主体当前绘制</span><strong>{state.actualCount.toLocaleString()}<small> 个</small></strong></div><p>{params.autoCount?state.adaptiveStatus:'手动控制粒子密度'}</p><div className="density-cap">{params.autoCount?'当前有效上限':'素材采样上限'}<b>{(params.autoCount?state.adaptiveCeiling:asset.count).toLocaleString()}</b></div></div>
@@ -404,7 +443,7 @@ export default function App() {
         {effect==='erosion'&&<Range label="卷曲力度" value={params.curl} min={0} max={3} step={.05} unit="×" onChange={v=>change('curl',v)} description="控制流场侵蚀中相邻粒子沿连续卷曲流线展开的力度。"/>}
         <Range label="短拖尾长度" value={params.trail} min={0} max={1} step={.01} onChange={v=>change('trail',v)} description="0关闭；沿粒子运动方向生成短点状尾迹，聚合时消失。"/><Toggle label="末段平滑淡出" on={params.fade} onChange={()=>change('fade',!params.fade)}/>
       </div>
-      <div className="param-group output-controls"><div className="group-heading"><span><Focus size={14}/>输出画面</span></div><div className="segmented resolution-mode">{(['720p','1080p'] as const).map(resolution=><button key={resolution} disabled={activeRecording} aria-pressed={params.resolution===resolution} className={params.resolution===resolution?'active':''} onClick={()=>change('resolution',resolution)}>{resolution.toUpperCase()}</button>)}</div><p className="control-hint">{outputSize} 实际像素，预览、截图与录像使用同一画布。{activeRecording?'录制结束前保持尺寸。':'1080p 更清晰，也需要更多图形性能。'}</p></div>
+      <div className="param-group output-controls"><div className="group-heading"><span><Focus size={14}/>输出画面</span></div><div className="segmented resolution-mode">{(['720p','1080p'] as const).map(resolution=><button key={resolution} disabled={activeRecording} aria-pressed={params.resolution===resolution} className={params.resolution===resolution?'active':''} onClick={()=>change('resolution',resolution)}>{resolution.toUpperCase()}</button>)}</div><p className="control-hint">当前画布 {renderSize.width} × {renderSize.height}。导出视频可独立选择高清尺寸。{activeRecording?'录制结束前保持尺寸。':'1080p 更清晰，也需要更多图形性能。'}</p></div>
       <div className="param-group"><div className="group-heading"><span><Image size={14}/>粒子外观</span><button title="重置外观" aria-label="重置外观" onClick={()=>reset(['size','color','opacity','glow','colorMode','exposure','contrast','sparkle','grainStyle'])}><RotateCcw size={12}/></button></div>
         <Range label="粒子大小" value={params.size} min={.5} max={8} step={.05} unit="px" onChange={v=>change('size',v)}/>
         <div className="segmented color-mode"><button className={params.colorMode==='original'?'active':''} disabled={!asset.hasOriginalColors} onClick={()=>change('colorMode','original')}>素材原色</button><button className={params.colorMode==='uniform'?'active':''} onClick={()=>change('colorMode','uniform')}>统一颜色</button></div>
@@ -415,23 +454,40 @@ export default function App() {
       <div className="param-group"><div className="group-heading"><span><AudioLines size={14}/>运动与观察</span></div>
         <Range label="粒子运动速度" value={params.motionSpeed} min={0} max={3} step={.05} unit="×" onChange={v=>change('motionSpeed',v)}/><Range label="播放倍率" value={params.playbackRate} min={.25} max={4} step={.05} unit="×" onChange={v=>change('playbackRate',v)}/><Range label="一键过渡时长" value={params.duration} min={.5} max={20} step={.5} unit="s" onChange={v=>change('duration',v)} description="一键聚散的单程时长；关键帧按时间轴播放。"/><Toggle label="自动环绕" on={params.autoRotate} onChange={()=>change('autoRotate',!params.autoRotate)}/>{params.autoRotate&&<Range label="环绕速度" value={params.rotationSpeed} min={.1} max={3} step={.1} unit="×" onChange={v=>change('rotationSpeed',v)}/>}
       </div><button className="reset-all" onClick={()=>{applyParameterPatch({...DEFAULT_PARAMS});notify(activeRecording?'效果参数已重置，录制中的数量模式保持。':'效果参数已重置，素材与关键帧保留。');}}><RotateCcw size={13}/>重置效果参数</button>
-    </>:<div className="record-panel"><div className="record-title"><span className="eyebrow">CANVAS CAPTURE</span><h2>记录这段变化。</h2><p>粒子、关键帧与视角一同进入画面。</p></div><div className="record-frame"><div><Box size={24}/></div><span>16 : 9</span><small>画布即输出构图</small></div><div className="record-spec"><div><span>输出分辨率</span><b>{outputSize}</b></div><div><span>目标帧率</span><b>30 FPS</b></div><div><span>实际格式</span><b>{codec.includes('mp4')?'MP4':codec?'WebM':'不可用'}</b></div><div><span>音频</span><b>无声</b></div></div><div className="record-resolution"><label>输出分辨率</label><div className="segmented">{(['720p','1080p'] as const).map(resolution=><button key={resolution} disabled={activeRecording} aria-pressed={params.resolution===resolution} className={params.resolution===resolution?'active':''} onClick={()=>change('resolution',resolution)}>{resolution.toUpperCase()}</button>)}</div></div><div className="quality-setting"><label>编码画质</label><div><button disabled={activeRecording} className={quality==='standard'?'active':''} onClick={()=>setQuality('standard')}>标准 <small>{params.resolution==='1080p'?12:6} Mbps</small></button><button disabled={activeRecording} className={quality==='high'?'active':''} onClick={()=>setQuality('high')}>高画质 <small>{params.resolution==='1080p'?24:12} Mbps</small></button></div></div>
+    </>:<div className="record-panel">
+      <div className="record-title"><span className="eyebrow">HIGH DEFINITION</span><h2>清晰，也流畅。</h2><p>导出整个时间轴，每一帧完整生成。</p></div>
+      <div className="export-settings">
+        <label htmlFor="export-resolution">视频分辨率</label><select id="export-resolution" disabled={activeRecording} value={resolution} onChange={e=>{const next=e.target.value as '1080'|'2160';setResolution(next);if(next==='2160')setExportFps(30);}}><option value="1080">1080p 全高清 · 1920 × 1080</option><option value="2160">4K 超高清 · 3840 × 2160</option></select>
+        <label htmlFor="export-fps">视频帧率</label><select id="export-fps" disabled={activeRecording} value={exportFps} onChange={e=>setExportFps(Number(e.target.value) as 30|60)}><option value="60" disabled={resolution==='2160'}>60 FPS · 更流畅</option><option value="30">30 FPS</option></select>
+      </div>
+      <div className="quality-setting"><label>编码画质</label><div><button disabled={activeRecording} className={quality==='standard'?'active':''} onClick={()=>setQuality('standard')}>标准</button><button disabled={activeRecording} className={quality==='high'?'active':''} onClick={()=>setQuality('high')}>高画质</button></div></div>
+      <div className="record-spec"><div><span>输出尺寸</span><b>{outputWidth} × {outputHeight}</b></div><div><span>固定帧率</span><b>{exportFps} FPS</b></div><div><span>格式 / 码率</span><b>MP4 / {Math.round(getExportBitrate(outputWidth,outputHeight,exportFps,quality)/1000000)} Mbps</b></div><div><span>完整动画</span><b>{(clip.duration/params.playbackRate).toFixed(1)} 秒</b></div></div>
+      <button className="primary record-start" disabled={activeRecording||!engineReady||importBusy||!isHDVideoExportSupported()} onClick={()=>void startHDExport()}><ArrowDownToLine size={15}/>导出高清视频</button>
+      <p className="record-note">按固定帧率生成整个时间轴，预览卡顿不会减少视频帧数。4K 导出耗时更长；需要保持页面打开。</p>
+      {exportError&&<p className="warning" role="alert">{exportError}</p>}
+      {!isHDVideoExportSupported()&&<p className="warning">此浏览器不支持高清导出，请使用最新版 Chrome 或 Edge。</p>}
+      {exportResult&&<div className="result-actions"><button className="secondary" onClick={()=>{setVideoSource('export');setVideoOpen(true);}}><Play size={14}/>预览高清</button><button className="secondary" onClick={()=>downloadVideo(exportResult)}><ArrowDownToLine size={14}/>下载 MP4</button></div>}
+      <div className="divider"/><div className="section-title"><span>自由录制 · 1080p / 60 FPS 目标</span></div>
+      <p className="record-note">记录现场操作和视角变化，流畅度取决于实时帧率。平滑动画请选择上方高清导出。</p>
       <div className="record-status-box"><span className={'status-light '+record.status}/><strong>{({idle:'准备就绪',recording:'正在录制',paused:'录制已暂停',processing:'正在生成视频',ready:'视频已生成',error:'录制出错'})[record.status]}</strong><b>{formatTime(record.elapsed)}</b></div>
-      {!activeRecording?<button className="primary record-start" disabled={!supported||!engineReady||importBusy} onClick={startRecording}><Circle size={14}/>{record.status==='ready'?'重新录制':'开始自由录制'}</button>:<div className="record-actions"><button className="secondary" disabled={record.status==='processing'} onClick={()=>record.status==='paused'?recorder.current?.resume():recorder.current?.pause()}>{record.status==='paused'?<Play size={14}/>:<Pause size={14}/>} {record.status==='paused'?'继续录制':'暂停录制'}</button><button className="stop-record" disabled={record.status==='processing'} onClick={()=>recorder.current?.stop()}><Square size={12}/>停止并生成</button></div>}
-      {record.result&&<div className="result-actions"><button className="secondary" onClick={()=>setVideoOpen(true)}><Play size={14}/>预览视频</button><button className="secondary" onClick={()=>recorder.current?.download()}><ArrowDownToLine size={14}/>下载</button></div>}
-      <p className="record-note">空格只暂停动画，录制仍继续。暂停录制会同时冻结动画，恢复后延续原状态。录制中可调参数与视角，素材替换被锁定。</p><div className="record-limits"><span>上限 120 秒</span><span>200 MB</span><span>{(record.bytes/1024/1024).toFixed(1)} MB</span></div>{!supported&&<p className="warning">当前浏览器不支持画布录制，请使用支持 MediaRecorder 的桌面浏览器。</p>}
+      {!realtimeRecording?<button className="secondary record-start" disabled={!supported||!engineReady||importBusy||exportBusy} onClick={startRealtimeRecording}><Circle size={14}/>{record.status==='ready'?'重新录制':'开始自由录制'}</button>:<div className="record-actions"><button className="secondary" disabled={record.status==='processing'} onClick={()=>record.status==='paused'?recorder.current?.resume():recorder.current?.pause()}>{record.status==='paused'?<Play size={14}/>:<Pause size={14}/>} {record.status==='paused'?'继续录制':'暂停录制'}</button><button className="stop-record" disabled={record.status==='processing'} onClick={()=>recorder.current?.stop()}><Square size={12}/>停止并生成</button></div>}
+      {record.result&&<div className="result-actions"><button className="secondary" onClick={()=>{setVideoSource('record');setVideoOpen(true);}}><Play size={14}/>预览录像</button><button className="secondary" onClick={()=>downloadVideo(record.result!)}><ArrowDownToLine size={14}/>下载</button></div>}
+      <div className="record-limits"><span>自由录制上限 120 秒</span><span>200 MB</span><span>{(record.bytes/1024/1024).toFixed(1)} MB</span></div>{!supported&&<p className="warning">当前浏览器不支持自由录制。</p>}
     </div>}</div></aside>
-    <footer className="timeline-workspace"><div className="timeline-status"><span><i className={state.running?'playing':''}/>{state.running?(state.playbackSource==='timeline'?'关键帧播放中':'自由聚散中'):(state.playbackSource==='timeline'?'时间轴已暂停':'自由聚散已暂停')}<kbd>Space</kbd>播放 / 暂停</span><span>{current.name}<b>主体 {state.actualCount.toLocaleString()} · 外围 {state.ambientCount.toLocaleString()} · 短尾 {state.filamentCount.toLocaleString()} 组</b><em>{!state.running&&!params.autoRotate&&record.status!=='recording'?'静止 · 按需渲染':Math.round(state.fps)+' FPS'}</em></span></div>
+    <footer className="timeline-workspace" inert={exportBusy}><div className="timeline-status"><span><i className={state.running?'playing':''}/>{state.running?(state.playbackSource==='timeline'?'关键帧播放中':'自由聚散中'):(state.playbackSource==='timeline'?'时间轴已暂停':'自由聚散已暂停')}<kbd>Space</kbd>播放 / 暂停</span><span>{current.name}<b>主体 {state.actualCount.toLocaleString()} · 外围 {state.ambientCount.toLocaleString()} · 短尾 {state.filamentCount.toLocaleString()} 组</b><em>{!state.running&&!params.autoRotate&&record.status!=='recording'?'静止 · 按需渲染':Math.round(state.fps)+' FPS'}</em></span></div>
       {petalTiming&&<div className="petal-phase-line"><Sparkles size={11}/><span>预设阶段：{state.playbackSource==='timeline'?petalPhaseAt(state.timelineTime,petalTiming):'自由形态编辑'}</span><small>独立消散 / 聚合时长在右侧调整 · 时间轴以秒计</small></div>}
       <TimelinePanel clip={clip} time={state.timelineTime} playing={state.running&&state.playbackSource==='timeline'} loop={state.timelineLoop} currentSample={currentSample} getCurrentFrame={()=>({time:engine.current?.state.timelineTime??state.timelineTime,sample:engine.current?.currentSample??currentSample})} onClipChange={changeClip} onSeek={t=>engine.current?.seekTimeline(t)} onTogglePlay={()=>{const e=engine.current;if(e)e.setTimelinePlaying(!(e.state.running&&e.state.playbackSource==='timeline'));}} onLoopChange={v=>engine.current?.setTimelineLoop(v)} disabled={!engineReady||playbackLocked}/>
     </footer>
     {presentation&&<button className="secondary exit-presentation" onClick={fullscreen}><Maximize2 size={14}/>退出展示 <kbd>ESC</kbd></button>}
+    {exportBusy&&<div className="modal-backdrop export-backdrop"><section className="modal hd-progress" role="dialog" aria-modal="true" aria-labelledby="hd-progress-title"><LoaderCircle className="spin" size={30}/><h2 id="hd-progress-title">正在生成高清视频</h2><p>{outputWidth} × {outputHeight} · {exportFps} FPS · MP4</p><progress aria-label="视频导出进度" max="1" value={exportProgress}/><strong>{Math.round(exportProgress*100)}%</strong><p>每一帧完整生成，请保持页面打开。</p><button className="secondary" autoFocus onClick={()=>exportAbort.current?.abort()}>取消导出</button></section></div>}
     {toast&&<div className="toast" role="status"><Check size={15}/>{toast}<button aria-label="关闭提示" onClick={()=>setToast('')}><X size={14}/></button></div>}
     {importOpen&&<div className="modal-backdrop" onClick={()=>setImportOpen(false)}><section className={'modal import-modal '+(dragging?'dragging':'')} role="dialog" aria-modal="true" aria-labelledby="import-title" onClick={e=>e.stopPropagation()} onDragOver={e=>{e.preventDefault();e.stopPropagation();setDragging(true);}} onDragLeave={e=>{if(!e.currentTarget.contains(e.relatedTarget as Node))setDragging(false);}} onDrop={dropFiles}>
       <div className="modal-heading"><div><span className="eyebrow">BRING YOUR MATERIAL</span><h2 id="import-title">让素材变成粒子。</h2></div><button className="icon-button" aria-label="关闭素材导入" onClick={()=>setImportOpen(false)}><X size={20}/></button></div>
       <button className={'drop-zone '+(dragging?'dragging':'')} disabled={activeRecording} onClick={()=>fileRef.current?.click()}>{importBusy?<LoaderCircle className="spin" size={31}/>:<Upload size={31}/>}<strong>{importBusy?'正在处理 '+importState.name:dragging?'松开以导入素材':'拖入图片或 GLB 模型'}</strong><span>{importBusy?'仍可选择其他文件，以最后一次选择为准':'或点击这里，从电脑选择文件'}</span><small>PNG · JPG · JPEG · GLB</small></button>
       {importState.status==='error'&&<div className="import-error" role="alert"><strong>未能导入 {importState.name}</strong><p>{importState.error}</p><small>原有素材已保留，可重新选择文件。</small></div>}
       <div className="import-formats"><div><Image size={18}/><b>图片</b><p>保留宽高比和原色。透明区域自动过滤；JPG 保留背景。</p></div><div><Box size={18}/><b>静态 3D 模型</b><p>GLB 多网格表面采样。支持基色、顶点色与基础色贴图。</p></div></div>
+      <div className="reference-example uploaded-example"><button disabled={activeRecording||importBusy} onClick={loadUploadedDemo}><img src="/examples/uploaded-model-preview.jpg" alt="用户提供的双朵百合三维模型"/><span><b>你的百合花束 · 导入模型预设</b><small>来自原始 GLB · 完整三维 / 原色 / 36 秒动画</small></span><Play size={17}/></button><a href="/examples/uploaded-model.glb" download="Lily_Bouquet.glb">下载网页优化 GLB <ArrowDownToLine size={13}/></a></div>
+      <p className="import-capacity">GLB 支持最大 256 MiB / 500 万三角面，自动采样为粒子。</p>
       <div className="example-heading"><span>先试试示例</span><small>无需准备文件</small></div><div className="example-grid"><div><button disabled={activeRecording} onClick={()=>example('/examples/color-flower.png','color-flower.png')}><img src="/examples/color-flower.png" alt="粉色花瓣与黄色花蕊的透明花朵"/><span><b>彩色花朵</b><small>透明 PNG / 原色粒子</small></span><ArrowUpRight size={17}/></button><a href="/examples/color-flower.png" download>下载图片 <ArrowDownToLine size={12}/></a></div><div><button disabled={activeRecording} onClick={()=>example('/examples/sample-sphere.glb','sample-sphere.glb')}><span className="model-example"><Box size={33}/></span><span><b>三维组合</b><small>GLB / 多网格与颜色</small></span><ArrowUpRight size={17}/></button><a href="/examples/sample-sphere.glb" download>下载模型 <ArrowDownToLine size={12}/></a></div></div>
       <div className="reference-example lily-example"><button disabled={activeRecording||importBusy} onClick={loadWhiteLilyDemo}><img src="/examples/white-lily-preview-front.png" alt="参考照片制作的白百合立体近似"/><span><b>白百合 · 自然风蚀</b><small>白色花瓣 / 淡绿花心与棕色花药 / 36 秒渐隐回环</small></span><Play size={17}/></button><a href="/examples/white-lily-model.glb" download="Particle_White_Lily.glb">下载白百合 GLB 模型 <ArrowDownToLine size={13}/></a><a href="/examples/white-lily-reference.png" download="White_Lily_Reference.png">下载白百合参考图 <ArrowDownToLine size={13}/></a></div>
       <div className="reference-example petal-example"><button disabled={activeRecording||importBusy} onClick={()=>loadPetalDemo()}><img src="/examples/petal-preview-front.png" alt="粉色花瓣和橙黄色花心的立体花朵"/><span><b>花瓣微流 · 立体花朵</b><small>三维表面 / 稀疏外围 / 36 秒渐隐回环</small></span><Play size={17}/></button><a href="/examples/petal-model.glb" download="Particle_Petal.glb">下载花瓣 GLB 模型 <ArrowDownToLine size={13}/></a></div>
@@ -440,7 +496,7 @@ export default function App() {
       <div className="reference-example"><button disabled={activeRecording} onClick={loadReferenceDemo}><img src="/examples/particle-flower-reference.jpg" alt="你提供的彩色流线花朵"/><span><b>你的参考图 · 图片展示</b><small>原色粒子 · 12 秒聚散 / 缩放 / 旋转动画</small></span><Play size={17}/></button></div>
       <div className="import-footer"><span>素材在浏览器本地处理</span><button disabled={activeRecording} onClick={()=>runImport('粒子球体',async()=>createSphereAsset())}><RotateCcw size={12}/>恢复内置球体</button></div>
     </section></div>}
-    {help&&<div className="modal-backdrop" onClick={()=>setHelp(false)}><section className="modal help-modal" onClick={e=>e.stopPropagation()}><div className="modal-heading"><div><span className="eyebrow">QUICK START</span><h2>从素材到一段动画</h2></div><button className="icon-button" aria-label="关闭操作说明" onClick={()=>setHelp(false)}><X size={20}/></button></div><ol><li><b>导入素材</b><span>左上打开导入窗口，选择或拖入图片 / GLB，也可直接加载花朵或三维组合示例。</span></li><li><b>设计粒子变化</b><span>选择六种效果。右侧可调当前形态、侵蚀、拉丝、拖尾和淡出；原色模式保留素材颜色。</span></li><li><b>给变化打帧</b><span>拖动底部秒时间轴到目标位置，点击“添加关键帧”，编辑缩放、XYZ 旋转与聚散形态。修改会暂停，空格预览。</span></li><li><b>观察与记录</b><span>左键旋转相机，滚轮缩放，右键平移；R 重置视角。录制只包含画布，可预览并下载视频。</span></li></ol><p className="help-limit">图片是三维空间中的薄平面；模型支持静态表面。骨骼动画、Draco / KTX2 压缩数据和高级材质暂不支持。当前录像为 {params.resolution.toUpperCase()} / 目标 30 FPS。关键帧缩放与旋转作用于素材。</p><button className="primary" onClick={()=>setHelp(false)}>开始创作 <ArrowUpRight size={15}/></button></section></div>}
-    {videoOpen&&record.result&&<div className="modal-backdrop" onClick={()=>setVideoOpen(false)}><section className="modal video-modal" onClick={e=>e.stopPropagation()}><div className="modal-heading"><div><span className="eyebrow">YOUR CREATION</span><h2>粒子影像已生成</h2></div><button className="icon-button" aria-label="关闭视频预览" onClick={()=>setVideoOpen(false)}><X size={20}/></button></div><video src={record.result.url} controls playsInline preload="metadata"/><div className="video-meta"><span>{record.result.duration.toFixed(2)} 秒</span><span>{record.result.width} × {record.result.height}</span><span>{record.result.extension.toUpperCase()}</span><span>{(record.result.blob.size/1024/1024).toFixed(2)} MB</span></div><div className="video-buttons"><button className="secondary" onClick={()=>{setVideoOpen(false);setTab('record');}}>返回编辑</button><button className="primary" onClick={()=>recorder.current?.download()}><ArrowDownToLine size={16}/>下载视频</button></div></section></div>}
+    {help&&<div className="modal-backdrop" onClick={()=>setHelp(false)}><section className="modal help-modal" onClick={e=>e.stopPropagation()}><div className="modal-heading"><div><span className="eyebrow">QUICK START</span><h2>从素材到一段动画</h2></div><button className="icon-button" aria-label="关闭操作说明" onClick={()=>setHelp(false)}><X size={20}/></button></div><ol><li><b>导入素材</b><span>左上打开导入窗口，选择或拖入图片 / GLB，也可直接加载花朵或三维组合示例。</span></li><li><b>设计粒子变化</b><span>选择六种效果。右侧可调当前形态、侵蚀、拉丝、拖尾和淡出；原色模式保留素材颜色。</span></li><li><b>给变化打帧</b><span>拖动底部秒时间轴到目标位置，点击“添加关键帧”，编辑缩放、XYZ 旋转与聚散形态。修改会暂停，空格预览。</span></li><li><b>观察与记录</b><span>左键旋转相机，滚轮缩放，右键平移；R 重置视角。录制只包含画布，可预览并下载视频。</span></li></ol><p className="help-limit">图片是三维空间中的薄平面；模型支持静态表面。骨骼动画、Draco / KTX2 压缩数据和高级材质暂不支持。高清导出支持 1080p / 60 FPS 与 4K / 30 FPS；自由录制为 1080p / 目标 60 FPS。关键帧缩放与旋转作用于素材。</p><button className="primary" onClick={()=>setHelp(false)}>开始创作 <ArrowUpRight size={15}/></button></section></div>}
+    {videoOpen&&videoResult&&<div className="modal-backdrop" onClick={()=>setVideoOpen(false)}><section className="modal video-modal" onClick={e=>e.stopPropagation()}><div className="modal-heading"><div><span className="eyebrow">YOUR CREATION</span><h2>粒子影像已生成</h2></div><button className="icon-button" aria-label="关闭视频预览" onClick={()=>setVideoOpen(false)}><X size={20}/></button></div><video src={videoResult.url} controls playsInline preload="metadata"/><div className="video-meta"><span>{videoResult.duration.toFixed(2)} 秒</span><span>{videoResult.width} × {videoResult.height}</span><span>{videoResult.extension.toUpperCase()}</span><span>{videoSource==='export'&&videoResult.fps?videoResult.fps+' FPS':'实时录制'}</span><span>{(videoResult.blob.size/1024/1024).toFixed(2)} MB</span></div><div className="video-buttons"><button className="secondary" onClick={()=>{setVideoOpen(false);setTab('record');}}>返回编辑</button><button className="primary" onClick={()=>downloadVideo(videoResult)}><ArrowDownToLine size={16}/>下载视频</button></div></section></div>}
   </div>;
 }

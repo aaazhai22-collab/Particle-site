@@ -23,9 +23,10 @@ const POOL_SIZE = MAX_PARTICLES;
 const RADIUS = 1.35;
 const IMAGE_SAMPLE_SIDE = 2048;
 const TEXTURE_SAMPLE_SIDE = 2048;
-const MAX_TRIANGLES = 1_000_000;
+// One Float64 area entry per face: bounded to 40 MB, with no per-face objects.
+const MAX_TRIANGLES = 5_000_000;
 const MAX_IMAGE_BYTES = 50 * 1024 * 1024;
-const MAX_MODEL_BYTES = 100 * 1024 * 1024;
+const MAX_MODEL_BYTES = 256 * 1024 * 1024;
 const MAX_DECODE_PIXELS = 36_000_000;
 const IMAGE_HEADER_BYTES = 1024 * 1024;
 const FALLBACK_COLOR = new THREE.Color('#b6a4ff');
@@ -253,7 +254,16 @@ async function loadImage(file: File): Promise<ParticleAsset> {
 }
 
 type ColorMaterial = THREE.Material & { color?: THREE.Color; map?: THREE.Texture | null };
-interface Triangle { geometry: THREE.BufferGeometry; material: ColorMaterial | undefined; matrix: THREE.Matrix4; normalMatrix: THREE.Matrix3; region: number; a: number; b: number; c: number; area: number }
+interface ModelMesh {
+  geometry: THREE.BufferGeometry;
+  material: ColorMaterial | ColorMaterial[];
+  matrix: THREE.Matrix4;
+  normalMatrix: THREE.Matrix3;
+  region: number;
+  start: number;
+  firstTriangle: number;
+  triangleCount: number;
+}
 interface Raster { width: number; height: number; pixels: Uint8ClampedArray }
 
 function textureRaster(texture: THREE.Texture): Raster | null {
@@ -280,8 +290,8 @@ export function sampleModelSceneAsync(scene: THREE.Object3D, name: string, initi
 
 function* modelSamplingSteps(scene: THREE.Object3D, name: string, initialNotes: string[]): Generator<void, ParticleAsset> {
   scene.updateMatrixWorld(true);
-  const notes = [...initialNotes]; const triangles: Triangle[] = []; const a = new THREE.Vector3(); const b = new THREE.Vector3(); const c = new THREE.Vector3(); const edge = new THREE.Vector3(); const cross = new THREE.Vector3();
-  let skippedMeshes = 0; let invalidTriangles = 0;
+  const notes = [...initialNotes]; const meshes: ModelMesh[] = []; const a = new THREE.Vector3(); const b = new THREE.Vector3(); const c = new THREE.Vector3(); const edge = new THREE.Vector3(); const cross = new THREE.Vector3();
+  let skippedMeshes = 0; let invalidTriangles = 0; let triangleCount = 0;
   let meshIndex = 0;
   const objects: THREE.Object3D[] = []; scene.traverse(object => objects.push(object));
   for (const object of objects) {
@@ -292,39 +302,52 @@ function* modelSamplingSteps(scene: THREE.Object3D, name: string, initialNotes: 
     if (!position || position.itemSize < 3) { skippedMeshes++; continue; }
     const length = index ? index.count : position.count;
     if (length % 3) { skippedMeshes++; continue; }
-    const normalMatrix = new THREE.Matrix3().getNormalMatrix(mesh.matrixWorld);
-    const region = radicalInverse(++meshIndex, 2);
     const start = Math.max(0, Math.ceil(geometry.drawRange.start / 3) * 3); const end = Math.min(length, Number.isFinite(geometry.drawRange.count) ? geometry.drawRange.start + geometry.drawRange.count : length);
-    for (let offset = start; offset + 2 < end; offset += 3) {
-      if (offset > start && (offset - start) % 24_576 === 0) yield;
+    const count = Math.max(0, Math.floor((end - start) / 3));
+    if (!count) continue;
+    if (!Number.isSafeInteger(count) || triangleCount + count > MAX_TRIANGLES) throw new Error('模型超过 5,000,000 个三角面。请先简化网格，避免浏览器采样内存过高；不会截断模型。');
+    const matrix = mesh.matrixWorld.clone();
+    meshes.push({ geometry, material: mesh.material as ColorMaterial | ColorMaterial[], matrix, normalMatrix: new THREE.Matrix3().getNormalMatrix(matrix), region: radicalInverse(++meshIndex, 2), start, firstTriangle: triangleCount, triangleCount: count });
+    triangleCount += count;
+  }
+  // Retain every face in a compact area prefix. Invalid faces have zero weight,
+  // so binary search naturally skips them without a second index/object array.
+  const cumulative = new Float64Array(triangleCount); let total = 0;
+  for (const mesh of meshes) {
+    const position = mesh.geometry.getAttribute('position'); const index = mesh.geometry.index;
+    for (let face = 0; face < mesh.triangleCount; face++) {
+      if (face > 0 && face % 8_192 === 0) yield;
+      const offset = mesh.start + face * 3;
       const ia = index ? index.getX(offset) : offset; const ib = index ? index.getX(offset + 1) : offset + 1; const ic = index ? index.getX(offset + 2) : offset + 2;
-      if (![ia, ib, ic].every(vertex => Number.isInteger(vertex) && vertex >= 0 && vertex < position.count)) { invalidTriangles++; continue; }
-      a.fromBufferAttribute(position, ia).applyMatrix4(mesh.matrixWorld); b.fromBufferAttribute(position, ib).applyMatrix4(mesh.matrixWorld); c.fromBufferAttribute(position, ic).applyMatrix4(mesh.matrixWorld);
-      const area = cross.subVectors(b, a).cross(edge.subVectors(c, a)).length() / 2;
-      if (!Number.isFinite(area) || area <= 1e-12) { invalidTriangles++; continue; }
-      let material: ColorMaterial | undefined;
-      if (Array.isArray(mesh.material)) { const group = geometry.groups.find(group => offset >= group.start && offset < group.start + group.count); material = group ? mesh.material[group.materialIndex ?? 0] as ColorMaterial : undefined; }
-      else material = mesh.material as ColorMaterial;
-      triangles.push({ geometry, material, matrix: mesh.matrixWorld, normalMatrix, region, a: ia, b: ib, c: ic, area });
-      if (triangles.length > MAX_TRIANGLES) throw new Error('模型超过 1,000,000 个有效三角面，请先简化模型再导入。');
+      if (Number.isInteger(ia) && ia >= 0 && ia < position.count && Number.isInteger(ib) && ib >= 0 && ib < position.count && Number.isInteger(ic) && ic >= 0 && ic < position.count) {
+        a.fromBufferAttribute(position, ia).applyMatrix4(mesh.matrix); b.fromBufferAttribute(position, ib).applyMatrix4(mesh.matrix); c.fromBufferAttribute(position, ic).applyMatrix4(mesh.matrix);
+        const area = cross.subVectors(b, a).cross(edge.subVectors(c, a)).length() / 2;
+        if (Number.isFinite(area) && area > 1e-12) total += area;
+        else invalidTriangles++;
+      } else invalidTriangles++;
+      cumulative[mesh.firstTriangle + face] = total;
     }
   }
-  if (!triangles.length) throw new Error('模型没有有效的静态三角网格。当前版本不支持骨骼、形变、实例化、点或线模型。');
+  if (!(total > 0) || !Number.isFinite(total)) throw new Error('模型没有有效的静态三角网格。当前版本不支持骨骼、形变、实例化、点或线模型。');
   if (skippedMeshes) notes.push(`已跳过 ${skippedMeshes} 个不支持的骨骼 / 形变 / 实例化 / 非三角对象，仅采样有效静态网格。`);
   if (invalidTriangles) notes.push(`已跳过 ${invalidTriangles.toLocaleString()} 个退化或无效三角面。`);
-  const cumulative = new Float64Array(triangles.length); let total = 0;
-  triangles.forEach((triangle, index) => { total += triangle.area; cumulative[index] = total; });
   // Keep full precision until centered, so far-away node translations do not collapse small geometry.
   const positions = new Float64Array(POOL_SIZE * 3); const colors = new Float32Array(POOL_SIZE * 3); const rasters = new Map<THREE.Texture, Raster | null>(); const warned = new Set<string>(); const uv = new THREE.Vector2();
   const normals = new Float32Array(POOL_SIZE * 3); const surface = new Float32Array(POOL_SIZE * 3);
   const sampleNormal = new THREE.Vector3(); const localNormal = new THREE.Vector3();
+  const vertexIds = [0, 0, 0];
   let hasOriginalColors = false;
   const warn = (key: string, text: string) => { if (!warned.has(key)) { warned.add(key); notes.push(text); } };
   for (let i = 0; i < POOL_SIZE; i++) {
-    if (i > 0 && i % 8_192 === 0) yield;
-    const triangle = triangles[selectCumulativeIndex(cumulative, radicalInverse(i + 1, 2) * total)];
-    const weights = sampleTriangleWeights(i); const attribute = triangle.geometry.getAttribute('position'); const vertexIds = [triangle.a, triangle.b, triangle.c];
-    a.fromBufferAttribute(attribute, triangle.a).applyMatrix4(triangle.matrix); b.fromBufferAttribute(attribute, triangle.b).applyMatrix4(triangle.matrix); c.fromBufferAttribute(attribute, triangle.c).applyMatrix4(triangle.matrix);
+    if (i > 0 && i % 2_048 === 0) yield;
+    const face = selectCumulativeIndex(cumulative, radicalInverse(i + 1, 2) * total);
+    let low = 0; let high = meshes.length - 1;
+    while (low < high) { const middle = (low + high + 1) >>> 1; if (meshes[middle].firstTriangle <= face) low = middle; else high = middle - 1; }
+    const triangle = meshes[low];
+    const offset = triangle.start + (face - triangle.firstTriangle) * 3; const index = triangle.geometry.index;
+    vertexIds[0] = index ? index.getX(offset) : offset; vertexIds[1] = index ? index.getX(offset + 1) : offset + 1; vertexIds[2] = index ? index.getX(offset + 2) : offset + 2;
+    const weights = sampleTriangleWeights(i); const attribute = triangle.geometry.getAttribute('position');
+    a.fromBufferAttribute(attribute, vertexIds[0]).applyMatrix4(triangle.matrix); b.fromBufferAttribute(attribute, vertexIds[1]).applyMatrix4(triangle.matrix); c.fromBufferAttribute(attribute, vertexIds[2]).applyMatrix4(triangle.matrix);
     positions.set([a.x * weights[0] + b.x * weights[1] + c.x * weights[2], a.y * weights[0] + b.y * weights[1] + c.y * weights[2], a.z * weights[0] + b.z * weights[1] + c.z * weights[2]], i * 3);
     const normalAttribute = triangle.geometry.getAttribute('normal');
     sampleNormal.set(0, 0, 0);
@@ -345,7 +368,10 @@ function* modelSamplingSteps(scene: THREE.Object3D, name: string, initialNotes: 
       surface.set([triangle.region, Math.pow(Math.max(0, 1 - Math.abs(sampleNormal.z)), 2), 0], i * 3);
       if (semantic) warn('surface', '部分局部流动分区无效，已按静态网格区域推定。');
     }
-    const material = triangle.material; const colorAttribute = triangle.geometry.getAttribute('color');
+    let material: ColorMaterial | undefined;
+    if (Array.isArray(triangle.material)) { const group = triangle.geometry.groups.find(group => offset >= group.start && offset < group.start + group.count); material = group ? triangle.material[group.materialIndex ?? 0] : undefined; }
+    else material = triangle.material;
+    const colorAttribute = triangle.geometry.getAttribute('color');
     const colorCandidate = material?.color;
     const base = colorCandidate && [colorCandidate.r, colorCandidate.g, colorCandidate.b].every(Number.isFinite) ? colorCandidate : undefined;
     const validVertexColor = colorAttribute && colorAttribute.itemSize >= 3 && vertexIds.every(id => id < colorAttribute.count && [colorAttribute.getX(id), colorAttribute.getY(id), colorAttribute.getZ(id)].every(Number.isFinite));
@@ -393,18 +419,65 @@ export function disposeAssetScenes(scenes: THREE.Object3D[]): void {
   images.forEach(image => { if (image && typeof (image as ImageBitmap).close === 'function') (image as ImageBitmap).close(); });
 }
 
+interface ModelDocument {
+  extensionsRequired?: string[];
+  animations?: unknown[];
+  images?: { uri?: string; bufferView?: number; mimeType?: string }[];
+  buffers?: { uri?: string }[];
+  bufferViews?: { buffer?: number; byteOffset?: number; byteLength: number }[];
+  textures?: { source?: number }[];
+  materials?: {
+    normalTexture?: unknown; occlusionTexture?: unknown; emissiveTexture?: unknown;
+    pbrMetallicRoughness?: { baseColorTexture?: { index: number }; metallicRoughnessTexture?: unknown };
+    extensions?: Record<string, Record<string, unknown>>;
+  }[];
+}
+
+/** Particle colors use only baseColor, COLOR_0 and its UV transform. */
+function omitUnusedMaterialTextures(documentData: ModelDocument): number {
+  let removed = 0;
+  for (const material of documentData.materials || []) {
+    for (const key of ['normalTexture', 'occlusionTexture', 'emissiveTexture'] as const) if (material[key] !== undefined) { delete material[key]; removed++; }
+    if (material.pbrMetallicRoughness?.metallicRoughnessTexture !== undefined) { delete material.pbrMetallicRoughness.metallicRoughnessTexture; removed++; }
+    for (const extension of Object.values(material.extensions || {})) for (const key of Object.keys(extension)) {
+      if (/Texture$/.test(key)) { delete extension[key]; removed++; }
+    }
+  }
+  return removed;
+}
+
+function checkModelBaseColorImages(documentData: ModelDocument, bytes: ArrayBuffer, jsonLength: number): void {
+  const imageIndices = new Set<number>();
+  for (const material of documentData.materials || []) {
+    const textureIndex = material.pbrMetallicRoughness?.baseColorTexture?.index;
+    const source = textureIndex === undefined ? undefined : documentData.textures?.[textureIndex]?.source;
+    if (source !== undefined) imageIndices.add(source);
+  }
+  const binHeader = 20 + jsonLength; const view = new DataView(bytes);
+  for (const imageIndex of imageIndices) {
+    const image = documentData.images?.[imageIndex]; const bufferView = image?.bufferView === undefined ? undefined : documentData.bufferViews?.[image.bufferView];
+    if (!image || !bufferView || (bufferView.buffer || 0) !== 0 || !['image/png', 'image/jpeg'].includes(image.mimeType || '')) continue;
+    const start = binHeader + 8 + (bufferView.byteOffset || 0);
+    if (binHeader + 8 > bytes.byteLength || view.getUint32(binHeader + 4, true) !== 0x004e4942 || start < binHeader + 8 || start + bufferView.byteLength > bytes.byteLength) throw new Error('模型基础色贴图数据损坏，无法读取。');
+    const dimensions = readImageDimensions(new Uint8Array(bytes, start, Math.min(bufferView.byteLength, IMAGE_HEADER_BYTES)));
+    if (dimensions.width * dimensions.height > MAX_DECODE_PIXELS) throw new Error('模型基础色贴图超过 3,600 万像素，解码可能占用过多内存。请将贴图缩小到 2048 像素后重新导入。');
+    checkDecodeDimensions(dimensions.width, dimensions.height);
+  }
+}
+
 async function loadModel(file: File): Promise<ParticleAsset> {
   const bytes = await file.arrayBuffer(); const data = new DataView(bytes);
   if (bytes.byteLength < 20 || data.getUint32(0, true) !== 0x46546c67 || data.getUint32(4, true) !== 2 || data.getUint32(8, true) !== bytes.byteLength) throw new Error('GLB 文件损坏或不是 glTF 2.0 二进制模型，请重新导出。');
-  let documentData: { extensionsRequired?: string[]; animations?: unknown[]; images?: { uri?: string }[]; buffers?: { uri?: string }[] };
+  let documentData: ModelDocument; let jsonLength: number;
   try {
-    const jsonLength = data.getUint32(12, true);
+    jsonLength = data.getUint32(12, true);
     if (data.getUint32(16, true) !== 0x4e4f534a || jsonLength > bytes.byteLength - 20) throw new Error();
     documentData = JSON.parse(new TextDecoder().decode(new Uint8Array(bytes, 20, jsonLength)));
   } catch { throw new Error('GLB 文件的模型数据损坏，无法读取。'); }
   if (documentData.extensionsRequired?.some(extension => ['KHR_draco_mesh_compression', 'EXT_meshopt_compression', 'KHR_texture_basisu'].includes(extension))) throw new Error('当前版本暂不支持 Draco / Meshopt 压缩模型或 KTX2 贴图，请导出未压缩、内嵌普通贴图的 GLB。');
   const external = [...(documentData.images || []), ...(documentData.buffers || [])].some(item => item.uri && !item.uri.startsWith('data:'));
   if (external) throw new Error('该 GLB 引用了外部文件。请将几何和贴图内嵌到一个 GLB 后重新导入。');
+  checkModelBaseColorImages(documentData, bytes, jsonLength);
   const notes: string[] = []; const urls = new Set<string>();
   if (documentData.animations?.length) notes.push('模型包含动画；本次仅采样静态初始姿态，不播放动画。');
   const manager = new THREE.LoadingManager();
@@ -412,7 +485,14 @@ async function loadModel(file: File): Promise<ParticleAsset> {
   manager.onError = () => { if (!notes.includes('部分基础色贴图加载失败，已回退到材质基色。')) notes.push('部分基础色贴图加载失败，已回退到材质基色。'); };
   let scenes: THREE.Group[] = [];
   try {
-    const gltf = await new GLTFLoader(manager).parseAsync(bytes, ''); scenes = gltf.scenes;
+    const loader = new GLTFLoader(manager);
+    loader.register(parser => {
+      // This parser owns its JSON; never change the user's GLB or global loaders.
+      const removed = omitUnusedMaterialTextures(parser.json as ModelDocument);
+      if (removed) notes.push('粒子保留基础色贴图与顶点原色，已跳过未参与粒子着色的法线 / 粗糙度 / 高光等贴图，减少解码内存。');
+      return { name: 'PARTICLE_base_color_only' };
+    });
+    const gltf = await loader.parseAsync(bytes, ''); scenes = gltf.scenes;
     return await sampleModelSceneAsync(gltf.scene, file.name, notes);
   } catch (error) {
     if (error instanceof Error && /静态|超过|外部|基础|坐标/.test(error.message)) throw error;
@@ -424,7 +504,7 @@ async function loadModel(file: File): Promise<ParticleAsset> {
 export async function loadParticleAsset(file: File): Promise<ParticleAsset> {
   const extension = file.name.split('.').pop()?.toLowerCase();
   if (!['png', 'jpg', 'jpeg', 'glb'].includes(extension || '')) throw new Error('不支持的文件格式。请选择 PNG、JPG、JPEG 图片或静态 GLB 模型。');
-  if (file.size > (extension === 'glb' ? MAX_MODEL_BYTES : MAX_IMAGE_BYTES)) throw new Error(extension === 'glb' ? '模型超过 100 MiB。为避免浏览器内存过高，请简化模型或缩小内嵌贴图后重试。' : '图片超过 50 MiB。为避免浏览器解码占用过多内存，请先缩小图片后重试。');
+  if (file.size > (extension === 'glb' ? MAX_MODEL_BYTES : MAX_IMAGE_BYTES)) throw new Error(extension === 'glb' ? '模型超过 256 MiB。为避免浏览器内存过高，请简化模型或缩小内嵌贴图后重试。' : '图片超过 50 MiB。为避免浏览器解码占用过多内存，请先缩小图片后重试。');
   try { return extension === 'glb' ? await loadModel(file) : await loadImage(file); }
   catch (error) { if (error instanceof Error && /[\u3400-\u9fff]/.test(error.message)) throw error; throw new Error('素材读取失败，请检查文件是否损坏并重新选择。'); }
 }

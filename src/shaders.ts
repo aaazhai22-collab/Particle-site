@@ -337,7 +337,7 @@ export const particleVertexShader = /* glsl */ `
     #ifdef PARTICLE_TRAIL
       gl_PointSize = max(0.9, uSize * perspectiveSize * (0.65 + aSeed.z * 0.4));
     #endif
-    gl_PointSize *= max(1.0, uOutputScale);
+    gl_PointSize *= max(0.01, uOutputScale);
   }
 `;
 

@@ -1,0 +1,72 @@
+{
+  "name": "百合花束",
+  "kind": "model",
+  "sourceFile": "9f800fcfd1bf080d6bc2ec787faba287.glb",
+  "sourceSha256": "58523715c4f76174d6b875ed29ab233a8bc4930535692555fec7ecda79b7e71a",
+  "sourceBytes": 83730068,
+  "generatedAt": "2026-10-26T04:34:35.920130+00:00",
+  "blenderVersion": "5.2.2 LTS",
+  "sourceMeshCount": 1,
+  "originalTriangles": 1500000,
+  "targetTriangles": 400000,
+  "exportedTriangles": 399999,
+  "exportedVertices": 295940,
+  "decimationRatio": 0.26666666666666666,
+  "originalBoundsZUp": {
+    "min": [
+      -0.3645940124988556,
+      -0.46102622151374817,
+      -6.194292723193939e-8
+    ],
+    "max": [
+      0.4562770128250122,
+      0.38158905506134033,
+      1.1249490976333618
+    ]
+  },
+  "exportedBoundsZUp": {
+    "min": [
+      -0.36470094323158264,
+      -0.4610462784767151,
+      0.00003106678923359141
+    ],
+    "max": [
+      0.4563104510307312,
+      0.38164177536964417,
+      1.1249535083770752
+    ]
+  },
+  "orientation": "glTF Y-up; front +Z toward Three.js default camera; no correction required",
+  "textures": [
+    {
+      "source": "texture_pbr_20250901",
+      "sourceSize": [
+        4096,
+        4096
+      ],
+      "exportSize": [
+        4096,
+        4096
+      ],
+      "encoding": "image/jpeg",
+      "quality": 90
+    }
+  ],
+  "exportedTextureCount": 1,
+  "preserved": [
+    "shape",
+    "UV",
+    "base color",
+    "double-sided material"
+  ],
+  "omitted": [
+    "normal map",
+    "metallic/roughness map",
+    "specular shading",
+    "normals"
+  ],
+  "selfContained": true,
+  "sourceUnchanged": true,
+  "fileBytes": 12593180,
+  "outputSha256": "a156a90c3a5442c021c1f0de9ff54b307908f2cb52c83d8b66b676e9f2f305b9"
+}

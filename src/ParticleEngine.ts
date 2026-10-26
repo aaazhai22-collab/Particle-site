@@ -4,7 +4,7 @@ import { advancePlayback, advanceTimelineTime, resumePlayback } from './playback
 import type { PlaybackMode, PlaybackState } from './playback';
 import { createSphereAsset } from './assets';
 import type { ParticleAsset } from './assets';
-import { DEFAULT_CLIP, normalizeClip, sampleClip } from './animation';
+import { DEFAULT_CLIP, normalizeClip } from './animation';
 import type { AnimationClip, AnimationSample } from './animation';
 import { particleVertexShader, particleFragmentShader } from './shaders';
 import { ParticlePostProcessing } from './ParticlePostProcessing';
@@ -14,6 +14,13 @@ import { layerBudgets, ambientPhase, motionTime } from './particleLayers';
 
 export type Effect = 'radial' | 'noise' | 'vortex' | 'directional' | 'wave' | 'erosion';
 export type { PlaybackMode } from './playback';
+export type PreviewQuality = 'smooth' | 'sharp';
+export interface OfflineExportSession {
+  canvas: HTMLCanvasElement;
+  duration: number;
+  renderFrame(timeSeconds: number): void;
+  restore(): void;
+}
 export type FlowDirection = 'x' | '-x' | 'y' | '-y' | 'z' | '-z';
 
 export interface ParticleParams {
@@ -149,6 +156,13 @@ export class ParticleEngine {
   private renderedParticleTrails = false;
   private renderedBloom = false;
   private pageHidden = typeof document !== 'undefined' && document.hidden;
+  private previewQuality: PreviewQuality = 'smooth';
+  private captureSize: { width: number; height: number } | null = null;
+  private renderWidth = OUTPUT_WIDTH;
+  private renderHeight = OUTPUT_HEIGHT;
+  private offlineActive = false;
+  private graphicsLost = false;
+  private offlineRestore: (() => void) | null = null;
 
   public constructor(
     private readonly container: HTMLElement,
@@ -159,7 +173,7 @@ export class ParticleEngine {
     this.onError = onError;
     try {
       this.renderer = new THREE.WebGLRenderer({
-        antialias: true, alpha: false, preserveDrawingBuffer: true, powerPreference: 'high-performance',
+        antialias: true, alpha: false, preserveDrawingBuffer: false, powerPreference: 'high-performance',
       });
     } catch (error) {
       onError?.('无法创建 WebGL 画面，请检查浏览器的硬件加速设置。');
@@ -260,7 +274,7 @@ export class ParticleEngine {
     this.requestAdaptiveWarmup('图形首次编译预热，暂不判断设备性能');
     this.updateCount();
     this.applyTimelineSample();
-    this.resizeObserver = new ResizeObserver(this.resize);
+    this.resizeObserver = new ResizeObserver(() => this.resize());
     this.resizeObserver.observe(container);
     this.resize();
     this.scheduleFrame();
@@ -268,6 +282,144 @@ export class ParticleEngine {
 
   public get state(): EngineState { return { ...this.current, playbackSource: this.timelineMode ? 'timeline' : 'free' }; }
   public get params(): ParticleParams { return { ...this.values }; }
+  public get outputSize(): { width: number; height: number } {
+    return { width: this.renderWidth, height: this.renderHeight };
+  }
+
+  public setPreviewQuality(quality: PreviewQuality): void {
+    if (quality !== 'smooth' && quality !== 'sharp') return;
+    this.previewQuality = quality;
+    this.resize();
+  }
+
+  /** Capture dimensions stay stable when the preview panel or fullscreen changes. */
+  public setCaptureSize(width: number, height: number): void;
+  public setCaptureSize(size: null): void;
+  public setCaptureSize(width: number | null, height?: number): void {
+    if (this.offlineActive) return;
+    if (width === null) this.captureSize = null;
+    else {
+      this.validateOutputSize(width, height ?? 0);
+      this.captureSize = { width: Math.round(width), height: Math.round(height!) };
+    }
+    this.resize();
+  }
+
+  /** An exact offline clock produces every output frame at the selected density. */
+  public beginOfflineExport(width: number, height: number, fps: number): OfflineExportSession {
+    if (this.destroyed) throw new Error('粒子画面已关闭，请重新打开后导出。');
+    if (this.graphicsLost) throw new Error('图形设备中断了画面渲染，请刷新后再导出。');
+    if (this.offlineActive || this.recordingLocked || this.captureActive) throw new Error('已有视频正在录制或导出，请等待完成。');
+    this.validateOutputSize(width, height);
+    if (!Number.isFinite(fps) || fps < 1 || fps > 120) throw new Error('导出帧率必须在 1–120 FPS 之间。');
+    const saved = {
+      state: { ...this.current }, timelineMode: this.timelineMode, pendingEffect: this.pendingEffect,
+      rotation: this.object.rotation.clone(), scale: this.object.scale.clone(),
+      position: this.camera.position.clone(), quaternion: this.camera.quaternion.clone(),
+      target: this.controls.target.clone(), zoom: this.camera.zoom,
+      controlsEnabled: this.controls.enabled, autoRotate: this.controls.autoRotate,
+      captureActive: this.captureActive, recordingLocked: this.recordingLocked,
+      width: this.renderWidth, height: this.renderHeight,
+      trailVelocity: this.trailProgressVelocity, ambientClock: this.ambientClock,
+      activeCount: this.activeCount, adaptive: this.adaptive,
+      adaptiveWarmupPending: this.adaptiveWarmupPending, adaptiveWarmupReason: this.adaptiveWarmupReason,
+      renderedTrails: this.renderedTrails, renderedParticleTrails: this.renderedParticleTrails, renderedBloom: this.renderedBloom,
+      cameraDirty: this.cameraDirty,
+    };
+    const rate = this.values.playbackRate;
+    const duration = this.clip.duration / rate;
+    const autoRotate = this.values.autoRotate;
+    const rotationSpeed = this.values.rotationSpeed;
+    const baseOffset = saved.position.clone().sub(saved.target);
+    const rotationAxis = this.camera.up.clone().normalize();
+    let restored = false;
+    const restore = (): void => {
+      if (restored) return;
+      restored = true;
+      this.offlineRestore = null;
+      this.timelineMode = saved.timelineMode;
+      this.pendingEffect = saved.pendingEffect;
+      this.object.rotation.copy(saved.rotation);
+      this.object.scale.copy(saved.scale);
+      this.camera.position.copy(saved.position);
+      this.camera.quaternion.copy(saved.quaternion);
+      this.camera.zoom = saved.zoom;
+      this.controls.target.copy(saved.target);
+      this.controls.enabled = saved.controlsEnabled;
+      this.controls.autoRotate = saved.autoRotate;
+      this.captureActive = saved.captureActive;
+      this.recordingLocked = saved.recordingLocked;
+      this.trailProgressVelocity = saved.trailVelocity;
+      this.ambientClock = saved.ambientClock;
+      this.activeCount = saved.activeCount;
+      Object.assign(this.current, saved.state);
+      this.updateCount();
+      this.offlineActive = false;
+      this.lastFrame = 0;
+      this.lastUpdate = 0;
+      this.fpsStart = 0;
+      this.fpsFrames = 0;
+      if (!this.destroyed && !this.graphicsLost) {
+        this.setRenderSize(saved.width, saved.height);
+        this.render();
+      }
+      // Preview timings never include the export's renders or shader warmup.
+      this.adaptiveWarmupPending = saved.adaptiveWarmupPending;
+      this.adaptiveWarmupReason = saved.adaptiveWarmupReason;
+      this.renderedTrails = saved.renderedTrails;
+      this.renderedParticleTrails = saved.renderedParticleTrails;
+      this.renderedBloom = saved.renderedBloom;
+      this.cameraDirty = saved.cameraDirty;
+      this.adaptive = saved.adaptive;
+      Object.assign(this.current, saved.state);
+      if (this.graphicsLost) this.current.running = false;
+      if (!this.destroyed) { this.emit(false); this.scheduleFrame(); }
+    };
+    this.offlineActive = true;
+    this.offlineRestore = restore;
+    cancelAnimationFrame(this.requestId);
+    this.requestId = 0;
+    this.controls.enabled = false;
+    this.controls.autoRotate = false;
+    this.current.running = false;
+    this.timelineMode = true;
+    this.recordingLocked = true;
+    // A slow GPU changes processing time, never export density or frame rate.
+    this.adaptive = new AdaptiveQualityController();
+    this.adaptive.reset(this.asset.count, this.values.count, this.values.count);
+    this.adaptive.freeze('逐帧导出期间固定完整粒子数量');
+    this.activeCount = Math.min(this.values.count, this.asset.count);
+    this.updateCount();
+    this.current.adaptiveStatus = '逐帧导出期间固定完整粒子数量';
+    try { this.setRenderSize(Math.round(width), Math.round(height)); }
+    catch (error) { restore(); throw error; }
+    return {
+      canvas: this.canvas, duration,
+      renderFrame: (timeSeconds: number): void => {
+        if (restored || this.destroyed) throw new Error('导出会话已结束。');
+        if (this.graphicsLost) throw new Error('图形设备中断了画面渲染，请刷新后降低分辨率再导出。');
+        if (!Number.isFinite(timeSeconds)) throw new Error('导出帧时间无效。');
+        const elapsed = clamp(timeSeconds, 0, duration);
+        this.current.timelineTime = clamp(elapsed * rate, 0, this.clip.duration);
+        this.applyTimelineSample();
+        const halfStep = rate / fps / 2;
+        const before = Math.max(0, this.current.timelineTime - halfStep);
+        const after = Math.min(this.clip.duration, this.current.timelineTime + halfStep);
+        this.trailProgressVelocity = after > before ? clamp(
+          (this.sampleTimeline(after).progress - this.sampleTimeline(before).progress) * rate / (after - before), -2, 2,
+        ) : 0;
+        if (Math.abs(this.trailProgressVelocity) > 0.000001) this.current.direction = this.trailProgressVelocity > 0 ? 1 : -1;
+        this.camera.position.copy(saved.position);
+        this.camera.quaternion.copy(saved.quaternion);
+        if (autoRotate) {
+          this.camera.position.copy(baseOffset).applyAxisAngle(rotationAxis, -Math.PI * 2 / 60 * rotationSpeed * elapsed).add(saved.target);
+          this.camera.lookAt(saved.target);
+        }
+        this.render();
+      },
+      restore,
+    };
+  }
   public get currentSample(): AnimationSample {
     return {
       scale: this.object.scale.x,
@@ -278,6 +430,7 @@ export class ParticleEngine {
 
   /** Construct both new GPU geometries before disposing the previous valid asset. */
   public setAsset(asset: ParticleAsset): void {
+    if (this.offlineActive) return;
     const count = Math.floor(asset.count);
     if (!(count > 0) || count > MAX_PARTICLES ||
         asset.positions.length < count * 3 || asset.colors.length < count * 3 || asset.seeds.length < count * 3) {
@@ -322,6 +475,7 @@ export class ParticleEngine {
   }
 
   public setParams(partial: Partial<ParticleParams>): void {
+    if (this.offlineActive) return;
     const previous = { ...this.values };
     const ranges: Partial<Record<keyof ParticleParams, [number, number]>> = {
       count: [1000, MAX_PARTICLES], size: [0.5, 8], opacity: [0, 1], spread: [0, 5],
@@ -366,8 +520,7 @@ export class ParticleEngine {
     if (previous.petalFlow !== this.values.petalFlow) this.updateTrailPath();
     if (previous.resolution !== this.values.resolution) {
       const [width, height] = this.values.resolution === '1080p' ? [1920, 1080] : [1280, 720];
-      this.renderer.setSize(width, height, false);
-      this.postProcessing.setSize(width, height);
+      this.setRenderSize(width, height);
       this.requestAdaptiveWarmup('输出分辨率变更预热，重新判断粒子数量');
     }
     // Repeated settings sync, colour, exposure and playback controls do not
@@ -385,6 +538,7 @@ export class ParticleEngine {
   }
 
   public setTimeline(clip: AnimationClip): void {
+    if (this.offlineActive) return;
     this.clip = normalizeClip(clip);
     this.current.timelineDuration = this.clip.duration;
     this.current.timelineTime = clamp(this.current.timelineTime, 0, this.clip.duration);
@@ -394,6 +548,7 @@ export class ParticleEngine {
   }
 
   public seekTimeline(seconds: number): void {
+    if (this.offlineActive) return;
     if (!Number.isFinite(seconds)) return;
     this.pendingEffect = null;
     this.timelineMode = true;
@@ -406,6 +561,7 @@ export class ParticleEngine {
   }
 
   public setTimelinePlaying(playing: boolean): void {
+    if (this.offlineActive) return;
     this.pendingEffect = null;
     this.timelineMode = true;
     if (playing && this.current.timelineTime >= this.clip.duration) this.current.timelineTime = 0;
@@ -416,12 +572,14 @@ export class ParticleEngine {
   }
 
   public setTimelineLoop(loop: boolean): void {
+    if (this.offlineActive) return;
     this.current.timelineLoop = loop;
     if (this.timelineMode) this.current.mode = loop ? 'loop' : 'disperse';
     this.emit();
   }
 
   public setProgress(value: number): void {
+    if (this.offlineActive) return;
     if (!Number.isFinite(value)) return;
     this.pendingEffect = null;
     this.timelineMode = false;
@@ -433,6 +591,7 @@ export class ParticleEngine {
   }
 
   public command(mode: PlaybackMode): void {
+    if (this.offlineActive) return;
     this.pendingEffect = null;
     this.timelineMode = false;
     this.current.mode = mode;
@@ -452,6 +611,7 @@ export class ParticleEngine {
   }
 
   public togglePause(): void {
+    if (this.offlineActive) return;
     if (this.timelineMode) { this.setTimelinePlaying(!this.current.running); return; }
     if (this.current.running) this.current.running = false;
     else Object.assign(this.current, resumePlayback(this.current));
@@ -459,10 +619,11 @@ export class ParticleEngine {
   }
 
   /** Recorder hook: restore the exact task, without restarting at an endpoint. */
-  public setRunning(running: boolean): void { this.current.running = running; this.emit(); }
+  public setRunning(running: boolean): void { if (this.offlineActive) return; this.current.running = running; this.emit(); }
 
   /** Keep static frames flowing to captureStream while a recording is active. */
   public setCaptureActive(active: boolean): void {
+    if (this.offlineActive) return;
     if (this.captureActive === active) return;
     this.captureActive = active;
     this.synchronizeRecordingFreeze();
@@ -472,6 +633,7 @@ export class ParticleEngine {
 
   /** Paused recording still owns a fixed particle density until generation ends. */
   public setRecordingLocked(locked: boolean): void {
+    if (this.offlineActive) return;
     if (this.recordingLocked === locked) return;
     this.recordingLocked = locked;
     this.synchronizeRecordingFreeze();
@@ -479,6 +641,7 @@ export class ParticleEngine {
   }
 
   public setEffect(effect: Effect): void {
+    if (this.offlineActive) return;
     if (!Object.prototype.hasOwnProperty.call(EFFECT_INDEX, effect)) return;
     if (effect === this.effect && this.pendingEffect === null) return;
     this.timelineMode = false;
@@ -498,6 +661,7 @@ export class ParticleEngine {
   }
 
   public resetView(): void {
+    if (this.offlineActive) return;
     const autoRotate = this.controls.autoRotate;
     this.controls.autoRotate = false;
     this.controls.enableDamping = false;
@@ -513,6 +677,7 @@ export class ParticleEngine {
   }
 
   public fitView(mode: 'full' | 'macro' = 'full'): void {
+    if (this.offlineActive) return;
     if (this.isPetalFlowActive() || (this.values.surfaceMode && this.current.progress === 0)) {
       this.geometry.computeBoundingBox();
       this.object.updateMatrixWorld(true);
@@ -555,6 +720,7 @@ export class ParticleEngine {
   public destroy(): void {
     if (this.destroyed) return;
     this.destroyed = true;
+    this.offlineRestore?.();
     cancelAnimationFrame(this.requestId);
     this.resizeObserver.disconnect();
     this.controls.removeEventListener('start', this.interactionStart);
@@ -749,7 +915,7 @@ export class ParticleEngine {
 
   private rebuildProgressLookup(): void {
     for (let i = 0; i < this.progressLookup.length; i++) {
-      this.progressLookup[i] = sampleClip(this.clip, i / (this.progressLookup.length - 1) * this.clip.duration).progress;
+      this.progressLookup[i] = this.sampleTimeline(i / (this.progressLookup.length - 1) * this.clip.duration).progress;
     }
     if (!this.progressTexture) {
       this.progressTexture = new THREE.DataTexture(this.progressLookup, this.progressLookup.length, 1, THREE.RedFormat, THREE.FloatType);
@@ -777,12 +943,12 @@ export class ParticleEngine {
     for (const frame of this.clip.keyframes) consider(frame.time, frame.progress);
     let left = Math.max(0, bestTime - this.clip.duration / denominator);
     let right = Math.min(this.clip.duration, bestTime + this.clip.duration / denominator);
-    const from = sampleClip(this.clip, left).progress;
-    const to = sampleClip(this.clip, right).progress;
+    const from = this.sampleTimeline(left).progress;
+    const to = this.sampleTimeline(right).progress;
     if (Math.abs(from - to) > 1e-9 && progress >= Math.min(from, to) && progress <= Math.max(from, to)) {
       for (let i = 0; i < 24; i++) {
         const middle = (left + right) / 2;
-        const value = sampleClip(this.clip, middle).progress;
+      const value = this.sampleTimeline(middle).progress;
         if ((to > from && value < progress) || (to < from && value > progress)) left = middle;
         else right = middle;
       }
@@ -791,8 +957,32 @@ export class ParticleEngine {
     return bestTime;
   }
 
+  /** The clip is normalized on edit, avoiding allocation/sorting per frame. */
+  private sampleTimeline(seconds: number): AnimationSample {
+    const frames = this.clip.keyframes;
+    const time = clamp(seconds, 0, this.clip.duration);
+    const first = frames[0], last = frames[frames.length - 1];
+    if (time <= first.time) return { scale: first.scale, rotation: first.rotation, progress: first.progress };
+    if (time >= last.time) return { scale: last.scale, rotation: last.rotation, progress: last.progress };
+    let low = 1, high = frames.length - 1;
+    while (low < high) {
+      const middle = (low + high) >>> 1;
+      if (frames[middle].time < time) low = middle + 1;
+      else high = middle;
+    }
+    const right = frames[low], left = frames[low - 1];
+    if (time === right.time) return { scale: right.scale, rotation: right.rotation, progress: right.progress };
+    const ratio = (time - left.time) / (right.time - left.time);
+    const eased = left.interpolation === 'hold' ? 0 : left.interpolation === 'linear' ? ratio : ratio * ratio * (3 - 2 * ratio);
+    const lerp = (from: number, to: number) => from + (to - from) * eased;
+    return {
+      scale: lerp(left.scale, right.scale), progress: lerp(left.progress, right.progress),
+      rotation: [0, 1, 2].map(axis => lerp(left.rotation[axis], right.rotation[axis])) as [number, number, number],
+    };
+  }
+
   private applyTimelineSample(): void {
-    const sample = sampleClip(this.clip, this.current.timelineTime);
+    const sample = this.sampleTimeline(this.current.timelineTime);
     this.current.progress = sample.progress;
     this.current.time = motionTime(this.current.timelineTime, this.values.motionSpeed);
     this.ambientClock = this.current.timelineTime;
@@ -828,7 +1018,7 @@ export class ParticleEngine {
   }
 
   private scheduleFrame(): void {
-    if (!this.destroyed && !this.requestId && (!document.hidden || this.captureActive)) {
+    if (!this.destroyed && !this.offlineActive && !this.graphicsLost && !this.requestId && (!document.hidden || this.captureActive)) {
       this.requestId = requestAnimationFrame(this.frame);
     }
   }
@@ -854,6 +1044,7 @@ export class ParticleEngine {
   private readonly preventContextMenu = (event: Event): void => event.preventDefault();
   private readonly contextLost = (event: Event): void => {
     event.preventDefault();
+    this.graphicsLost = true;
     this.current.running = false;
     this.onError?.('图形设备暂时不可用。请刷新页面重新创建粒子画面。');
   };
@@ -868,13 +1059,36 @@ export class ParticleEngine {
     this.needsRendering = true;
     this.scheduleFrame();
   }
-  private readonly resize = (): void => {
+  private resize(): void {
     if (this.destroyed) return;
     const width = Math.max(1, Math.min(this.container.clientWidth, this.container.clientHeight * 16 / 9));
     this.canvas.style.width = `${width}px`;
     this.canvas.style.height = `${width * 9 / 16}px`;
-    // Capture pixels remain exactly 1280 × 720 through resizing/fullscreen.
-  };
+    if (this.offlineActive) return;
+    if (this.captureSize) { this.setRenderSize(this.captureSize.width, this.captureSize.height); return; }
+    const dpr = clamp(window.devicePixelRatio || 1, 1, 2);
+    const maximum = this.previewQuality === 'sharp' ? 2560 : 1920;
+    const pixels = Math.max(16, Math.round(Math.min(width * dpr, maximum) / 16) * 16);
+    this.setRenderSize(pixels, pixels * 9 / 16);
+  }
+
+  private validateOutputSize(width: number, height: number): void {
+    if (!Number.isFinite(width) || !Number.isFinite(height) || width < 2 || height < 2 || width > 8192 || height > 8192) {
+      throw new Error('画面分辨率必须在 2–8192 像素之间。');
+    }
+  }
+
+  private setRenderSize(width: number, height: number): void {
+    if (width === this.renderWidth && height === this.renderHeight) return;
+    this.renderer.setSize(width, height, false);
+    this.postProcessing.setSize(width, height);
+    this.renderWidth = width;
+    this.renderHeight = height;
+    this.camera.aspect = width / height;
+    this.camera.updateProjectionMatrix();
+    this.material.uniforms.uOutputScale.value = height / OUTPUT_HEIGHT;
+    this.needsRendering = true;
+  }
 
   private render(): void {
     const u = this.material.uniforms;
@@ -884,7 +1098,7 @@ export class ParticleEngine {
     u.uTimelineActive.value = this.timelineMode ? 1 : 0;
     u.uTimelineTime.value = this.current.timelineTime;
     u.uTimelineDuration.value = this.clip.duration;
-    u.uOutputScale.value = this.values.resolution === '1080p' ? 1.5 : 1;
+    u.uOutputScale.value = (this.renderHeight || OUTPUT_HEIGHT) / OUTPUT_HEIGHT;
     const span = this.values.trail * (0.18 + this.values.stringiness * 0.22) * (1 + this.values.curl * 0.2);
     u.uTrailTimeSpan.value = span * this.values.motionSpeed;
     u.uTrailProgressSpan.value = this.values.trail * 0.22;
@@ -907,7 +1121,7 @@ export class ParticleEngine {
 
   private readonly frame = (now: number): void => {
     this.requestId = 0;
-    if (this.destroyed) return;
+    if (this.destroyed || this.offlineActive || this.graphicsLost) return;
     this.tick(now);
     this.scheduleFrame();
   };

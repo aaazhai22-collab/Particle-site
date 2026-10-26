@@ -131,7 +131,7 @@ function createEnvironment() {
     width: 1280,
     height: 720,
     captureStream(frameRate) {
-      assert.equal(frameRate, environment.manualCapture ? 0 : 30);
+      assert.equal(frameRate, environment.manualCapture ? 0 : (environment.targetFps ?? 30));
       if (environment.captureFailure) throw environment.captureFailure;
       const track = { stopped: false, stop() { this.stopped = true; } };
       if (environment.manualCapture) track.requestFrame = () => { environment.frameRequests = (environment.frameRequests || 0) + 1; };
@@ -156,6 +156,48 @@ function recorderTest(name, run) {
 }
 
 describe('CanvasRecorder 状态与资源回归', { concurrency: false }, () => {
+  recorderTest('1080p60 targets manual requests at 60 FPS and reports the selected capture rate', (env) => {
+    env.manualCapture = true;
+    env.replace(globalThis, 'CanvasCaptureMediaStreamTrack', { prototype: { requestFrame() {} } });
+    env.canvas.width = 1920; env.canvas.height = 1080;
+    const recorder = env.createRecorder();
+    recorder.start('high', { width: 1920, height: 1080, fps: 60 });
+    assert.equal(recorder.state.status, 'recording');
+    assert.equal(env.frameRequests, 1);
+    assert.equal(env.encoders.at(-1).options.videoBitsPerSecond, 48_000_000);
+    env.advance(17, true);
+    assert.equal(env.frameRequests, 2, 'a second capture is requested within the 30 FPS interval');
+    env.advance(17, true);
+    assert.equal(env.frameRequests, 3);
+    recorder.pause(); env.advance(1000, true);
+    assert.equal(env.frameRequests, 3);
+    recorder.resume(); env.advance(17, true);
+    assert.equal(env.frameRequests, 4);
+    recorder.stop(); env.encoders.at(-1).finish();
+    assert.equal(recorder.state.result.fps, 60);
+    assert.equal(recorder.state.result.requestedFrames, 4);
+    assert.equal(recorder.state.result.captureMode, 'manual');
+    recorder.destroy();
+  });
+
+  recorderTest('automatic capture receives the selected frame rate; invalid size and FPS never start a stream', (env) => {
+    env.targetFps = 60;
+    const recorder = env.createRecorder();
+    recorder.start('high', { width: 1920, height: 1080, fps: 60 });
+    assert.equal(recorder.state.status, 'error');
+    assert.equal(env.streams.length, 0);
+    recorder.start('high', { width: 1280, height: 720, fps: NaN });
+    assert.match(recorder.state.error, /帧率/);
+    assert.equal(env.streams.length, 0);
+    recorder.start('high', { width: 1280, height: 720, fps: 60 });
+    assert.equal(recorder.state.status, 'recording');
+    env.advance(100); recorder.stop(); env.encoders.at(-1).finish();
+    assert.equal(recorder.state.result.fps, 60);
+    assert.equal(recorder.state.result.captureMode, 'automatic');
+    assert.equal(recorder.state.result.requestedFrames, 0);
+    recorder.destroy();
+  });
+
   recorderTest('manual frame requests follow effective time, pause excludes requests, and teardown clears the pump', (env) => {
     env.manualCapture = true;
     env.replace(globalThis, 'CanvasCaptureMediaStreamTrack', { prototype: { requestFrame() {} } });

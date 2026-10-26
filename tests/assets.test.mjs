@@ -14,6 +14,12 @@ outputText = outputText.replace(/from (['"])\.\/particleLimits\1/g, () => `from 
 const assets = await import(`data:text/javascript;base64,${Buffer.from(outputText).toString('base64')}`);
 const maximumRadius = positions => { let value = 0; for (let i = 0; i < positions.length; i += 3) value = Math.max(value, Math.hypot(positions[i], positions[i + 1], positions[i + 2])); return value; };
 const geometry = () => new THREE.BufferGeometry().setAttribute('position', new THREE.Float32BufferAttribute([0, 0, 0, 2, 0, 0, 0, 1, 0], 3));
+const glb = (document, binary) => {
+  const json = Buffer.from(JSON.stringify(document)); const jsonLength = Math.ceil(json.length / 4) * 4; const binLength = Math.ceil(binary.length / 4) * 4;
+  const bytes = Buffer.alloc(28 + jsonLength + binLength); bytes.writeUInt32LE(0x46546c67, 0); bytes.writeUInt32LE(2, 4); bytes.writeUInt32LE(bytes.length, 8);
+  bytes.writeUInt32LE(jsonLength, 12); bytes.writeUInt32LE(0x4e4f534a, 16); bytes.fill(32, 20, 20 + jsonLength); json.copy(bytes, 20);
+  bytes.writeUInt32LE(binLength, 20 + jsonLength); bytes.writeUInt32LE(0x004e4942, 24 + jsonLength); Buffer.from(binary).copy(bytes, 28 + jsonLength); return bytes;
+};
 
 test('surface normals use inverse transpose across nonuniform rotated world transforms', () => {
   const shape = geometry();
@@ -199,7 +205,7 @@ test('PNG and real JPEG dimensions are read before decode and memory limits reje
   assert.deepEqual(assets.readImageDimensions(jpeg), { width: 480, height: 320 });
   assert.throws(() => assets.readImageDimensions(new Uint8Array([1, 2, 3])), /尺寸无法安全读取/);
   await assert.rejects(assets.loadParticleAsset({ name: 'large.png', size: 51 * 1024 * 1024, slice() { throw new Error('must not read'); } }), /50 MiB/);
-  await assert.rejects(assets.loadParticleAsset({ name: 'large.glb', size: 101 * 1024 * 1024, arrayBuffer() { throw new Error('must not read'); } }), /100 MiB/);
+  await assert.rejects(assets.loadParticleAsset({ name: 'large.glb', size: 256 * 1024 * 1024 + 1, arrayBuffer() { throw new Error('must not read'); } }), /256 MiB/);
   const header = new Uint8Array(png.subarray(0, 24)); const view = new DataView(header.buffer); view.setUint32(16, 10000); view.setUint32(20, 10000);
   await assert.rejects(assets.loadParticleAsset(new File([header], 'decompression-bomb.png')), /3,600 万像素/);
 });
@@ -295,4 +301,51 @@ test('cooperative model pool stays at 500k and preserves exact synchronous origi
     assert.deepEqual(asyncAsset.colors.subarray(0, count * 3), syncAsset.colors.subarray(0, count * 3));
     assert.deepEqual(asyncAsset.seeds.subarray(0, count * 3), syncAsset.seeds.subarray(0, count * 3));
   }
+});
+
+test('1.5 million triangles retain the entire model, area weighting and material groups beyond the old face cap', async () => {
+  const faceCount = 1_500_000; const firstFaces = 1_100_000;
+  const shape = new THREE.BufferGeometry().setAttribute('position', new THREE.Float32BufferAttribute([-10, 0, 0, -8, 0, 0, -10, 1, 0, 8, 0, 0, 10, 0, 0, 8, 1, 0], 3));
+  const indices = new Uint32Array(faceCount * 3);
+  for (let face = 0; face < faceCount; face++) { const vertex = face < firstFaces ? 0 : 3; indices[face * 3] = vertex; indices[face * 3 + 1] = vertex + 1; indices[face * 3 + 2] = vertex + 2; }
+  shape.setIndex(new THREE.BufferAttribute(indices, 1)); shape.addGroup(0, firstFaces * 3, 0); shape.addGroup(firstFaces * 3, (faceCount - firstFaces) * 3, 1);
+  const scene = new THREE.Group(); scene.add(new THREE.Mesh(shape, [new THREE.MeshBasicMaterial({ color: 0xff0000 }), new THREE.MeshBasicMaterial({ color: 0x00ff00 })]));
+  let pulses = 0; const pulse = setInterval(() => { pulses++; }, 0);
+  let asset; try { asset = await assets.sampleModelSceneAsync(scene, 'full-1.5m.glb'); } finally { clearInterval(pulse); }
+  assert.equal(asset.count, MAX_PARTICLES); assert.equal(asset.hasOriginalColors, true); assert.deepEqual(asset.notes, []); assert.ok(pulses > 10, 'area construction and color sampling must both yield');
+  let green = 0;
+  for (let i = 0; i < asset.count; i++) {
+    const isGreen = asset.colors[i * 3 + 1] > .9; if (isGreen) green++;
+    assert.equal(isGreen, asset.positions[i * 3] > 0, 'back-half geometry keeps its own material');
+    assert.equal(asset.normals[i * 3 + 2], 1);
+  }
+  assert.ok(Math.abs(green / asset.count - (faceCount - firstFaces) / faceCount) < .00002, 'faces after 1,000,000 must not be truncated or downweighted');
+});
+
+test('face allocation cap rejects before scanning or allocating giant input', () => {
+  const shape = geometry().setIndex([0, 1, 2]); shape.index.count = 5_000_001 * 3;
+  const scene = new THREE.Group(); scene.add(new THREE.Mesh(shape, new THREE.MeshBasicMaterial()));
+  assert.throws(() => assets.sampleModelScene(scene, 'over-cap.glb'), /5,000,000.*不会截断/);
+});
+
+test('256 MiB model capacity accepts the boundary while oversized input fails before reading', async () => {
+  const bytes = await readFile(new URL('../public/examples/sample-sphere.glb', import.meta.url));
+  const asset = await assets.loadParticleAsset({ name: 'boundary.glb', size: 256 * 1024 * 1024, async arrayBuffer() { return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength); } });
+  assert.equal(asset.kind, 'model'); assert.equal(asset.count, MAX_PARTICLES);
+});
+
+test('GLB color sampling skips unused PBR texture decoding while retaining base color and geometric normals', async () => {
+  const binary = new Float32Array([0, 0, 0, 2, 0, 0, 0, 1, 0]);
+  const texture = { index: 0 };
+  const document = { asset: { version: '2.0' }, scene: 0, scenes: [{ nodes: [0] }], nodes: [{ mesh: 0 }],
+    meshes: [{ primitives: [{ attributes: { POSITION: 0 }, material: 0 }] }],
+    accessors: [{ bufferView: 0, componentType: 5126, count: 3, type: 'VEC3', min: [0, 0, 0], max: [2, 1, 0] }],
+    buffers: [{ byteLength: binary.byteLength }], bufferViews: [{ buffer: 0, byteLength: binary.byteLength }],
+    materials: [{ normalTexture: texture, occlusionTexture: texture, emissiveTexture: texture, pbrMetallicRoughness: { baseColorFactor: [.2, .4, .6, 1], metallicRoughnessTexture: texture }, extensions: { KHR_materials_specular: { specularTexture: texture, specularColorTexture: texture } } }],
+    textures: [{ source: 0 }], images: [{ uri: 'data:image/png;base64,aW52YWxpZA==' }], extensionsUsed: ['KHR_materials_specular'] };
+  const bytes = glb(document, new Uint8Array(binary.buffer));
+  const asset = await assets.loadParticleAsset(new File([bytes], 'unused-pbr.glb'));
+  assert.equal(asset.hasOriginalColors, true); assert.ok(asset.notes.some(note => note.includes('已跳过未参与粒子着色')));
+  assert.ok(!asset.notes.some(note => /失败|回退/.test(note)), 'unused corrupt textures must never be decoded');
+  for (const i of [0, asset.count - 1]) { assert.deepEqual([...asset.colors.subarray(i * 3, i * 3 + 3)], [...new Float32Array([.2, .4, .6])]); assert.deepEqual([...asset.normals.subarray(i * 3, i * 3 + 3)], [0, 0, 1]); }
 });
