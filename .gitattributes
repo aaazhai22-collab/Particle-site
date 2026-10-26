@@ -1,0 +1,2 @@
+# Store Blender source models with Git LFS; retain their original bytes.
+*.blend filter=lfs diff=lfs merge=lfs -text

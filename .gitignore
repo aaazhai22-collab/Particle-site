@@ -1,9 +1,43 @@
+# Dependencies, builds, and caches
 node_modules/
 .pnpm-store/
 dist/
+.next/
+.vercel/
+.vite/
+.cache/
+coverage/
 *.tsbuildinfo
 __pycache__/
-.sites-local/
-artifacts/
-outputs/
-chrome-extensions-2026/
+*.py[cod]
+
+# Generated website exports and local verification output
+/particle-site/artifacts/
+/particle-site/outputs/
+/particle-site/out/
+/particle-site/.sites-local/
+/particle-site/chrome-extensions-2026/
+/particle-site*-deploy.tar.gz
+
+# Local environment files; keep shareable examples
+.env
+.env.*
+!.env.example
+!.env.*.example
+!.env.sample
+!.env.template
+
+# Blender backups; the original .blend files are tracked with Git LFS
+*.blend[0-9]*
+*.blend@
+*.blend~
+
+# Temporary files and operating system metadata
+*.log
+*.tmp
+*.temp
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+Desktop.ini
