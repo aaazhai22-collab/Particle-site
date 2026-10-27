@@ -1,0 +1,72 @@
+name: Publish website to GitHub Pages
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'particle-site/**'
+      - '.github/workflows/pages.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: github-pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pages: read
+    defaults:
+      run:
+        working-directory: particle-site
+    steps:
+      - name: Check out website source
+        uses: actions/checkout@v6
+        with:
+          # The Blender source is not needed by the published website.
+          lfs: false
+          persist-credentials: false
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v6
+        with:
+          version: 11.25.0
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          cache: pnpm
+          cache-dependency-path: particle-site/pnpm-lock.yaml
+      - name: Read GitHub Pages configuration
+        id: pages
+        uses: actions/configure-pages@v5
+      - name: Install locked dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Run automated tests
+        run: pnpm test
+      - name: Build website for its public URL
+        run: pnpm build
+        env:
+          NEXT_PUBLIC_BASE_PATH: ${{ steps.pages.outputs.base_path }}
+      - name: Upload published website files
+        uses: actions/upload-pages-artifact@v4
+        with:
+          path: particle-site/out
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.publish.outputs.page_url }}
+    steps:
+      - name: Publish GitHub Pages website
+        id: publish
+        uses: actions/deploy-pages@v5

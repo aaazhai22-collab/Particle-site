@@ -2,6 +2,12 @@
 
 本仓库管理青铜方鼎的 Blender 源模型、参考图，以及粒子展示网站。
 
+## 打开网站
+
+网站地址：<https://aaazhai22-collab.github.io/Particle-site/>。
+
+发布方式为 GitHub Pages。网站源码更新并推送到 `main` 后，GitHub 会自动检查、构建和发布；可在仓库的 **Actions** 页面查看进度。发布操作说明见 [GitHub Pages 说明](particle-site/docs/GITHUB-PAGES.md)。
+
 - `青铜方鼎_v002.blend`：Blender 源模型，通过 Git LFS 管理。
 - `正视图.png`、`侧视图.png`、`顶视图.png`、`底视图.png`：模型参考图。
 - `particle-site/`：网站源码、测试、说明文档和运行所需的示例素材，详见 [网站说明](particle-site/README.md)。

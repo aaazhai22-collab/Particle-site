@@ -8,6 +8,8 @@ import type { RecorderState } from './CanvasRecorder';
 import type { RecordingResult } from './CanvasRecorder';
 import { exportTimelineVideo, isHDVideoExportSupported, getExportBitrate } from './HDVideoExporter';
 import { createSphereAsset, loadParticleAsset } from './assets';
+import { loadExampleBlob } from './exampleFiles';
+import { publicAssetUrl } from './publicAssetUrl';
 import type { ParticleAsset } from './assets';
 import { LatestImport } from './importQueue';
 import { DEFAULT_CLIP, normalizeClip, sampleClip } from './animation';
@@ -227,12 +229,11 @@ export default function App() {
     });
   };
   const chooseFiles=(files:FileList|null)=>{if(!files?.length)return;const file=files[files.length-1];runImport(file.name,()=>loadParticleAsset(file));};
-  const example=(url:string,name:string)=>runImport(name,async()=>{const response=await fetch(url);if(!response.ok)throw new Error('示例素材读取失败，请稍后重试。');return loadParticleAsset(new File([await response.blob()],name));});
+  const example=(url:string,name:string)=>runImport(name,async()=>{const blob=await loadExampleBlob(url,'示例素材读取失败，请稍后重试。');return loadParticleAsset(new File([blob],name));});
   const loadUploadedDemo=()=>runImport('百合花束.glb',async()=>{
-    const response=await fetch('/examples/uploaded-model.glb');
-    if(!response.ok)throw new Error('百合花束读取失败，请重试或导入你提供的原始 GLB。');
-    const next=await loadParticleAsset(new File([await response.blob()],'百合花束.glb',{type:'model/gltf-binary'}));
-    return {...next,thumbnail:'/examples/uploaded-model-preview.jpg',notes:['来自你提供的 GLB · 双朵百合与完整茎叶。','原色三维粒子 · 可旋转观察与编辑动画。',...next.notes]};
+    const blob=await loadExampleBlob(publicAssetUrl('/examples/uploaded-model.glb'),'百合花束读取失败，请重试或导入你提供的原始 GLB。');
+    const next=await loadParticleAsset(new File([blob],'百合花束.glb',{type:'model/gltf-binary'}));
+    return {...next,thumbnail:publicAssetUrl('/examples/uploaded-model-preview.jpg'),notes:['来自你提供的 GLB · 双朵百合与完整茎叶。','原色三维粒子 · 可旋转观察与编辑动画。',...next.notes]};
   },()=>{
     const e=engine.current;if(!e)return;
     if(countTimer.current){clearTimeout(countTimer.current);countTimer.current=null;}
@@ -242,10 +243,9 @@ export default function App() {
     setEffect('erosion');setClip(normalizeClip(WHITE_LILY_CLIP));notify('你的百合花束已载入：原色三维展示，36 秒聚散循环。');
   });
   const loadWhiteLilyDemo=()=>runImport('白百合自然风蚀示例.glb',async()=>{
-    const response=await fetch('/examples/white-lily-model.glb');
-    if(!response.ok)throw new Error('白百合模型暂时无法读取，当前场景已保留，请重试或导入本地 GLB。');
-    const next=await loadParticleAsset(new File([await response.blob()],'白百合自然风蚀示例.glb',{type:'model/gltf-binary'}));
-    return {...next,thumbnail:'/examples/white-lily-preview-front.png',notes:[
+    const blob=await loadExampleBlob(publicAssetUrl('/examples/white-lily-model.glb'),'白百合模型暂时无法读取，当前场景已保留，请重试或导入本地 GLB。');
+    const next=await loadParticleAsset(new File([blob],'白百合自然风蚀示例.glb',{type:'model/gltf-binary'}));
+    return {...next,thumbnail:publicAssetUrl('/examples/white-lily-preview-front.png'),notes:[
       '参考照片制作的立体近似；背面与遮挡部分为补建。',
       '白色花瓣、淡绿花心与棕色花药 · 自然风蚀与渐隐回环。',
       ...next.notes,
@@ -259,10 +259,9 @@ export default function App() {
     notify('白百合已就绪：参考照片的立体近似，36 秒自然风蚀回环；数量按设备自动调整。');
   });
   const loadPetalDemo=(referenceLook=false)=>runImport('花瓣微流示例.glb',async()=>{
-    const response=await fetch('/examples/petal-model.glb');
-    if(!response.ok)throw new Error('花瓣模型暂时无法读取，当前场景已保留，请重试或导入本地 GLB。');
-    const next=await loadParticleAsset(new File([await response.blob()],'花瓣微流示例.glb',{type:'model/gltf-binary'}));
-    return {...next,thumbnail:'/examples/petal-preview-front.png',notes:[
+    const blob=await loadExampleBlob(publicAssetUrl('/examples/petal-model.glb'),'花瓣模型暂时无法读取，当前场景已保留，请重试或导入本地 GLB。');
+    const next=await loadParticleAsset(new File([blob],'花瓣微流示例.glb',{type:'model/gltf-binary'}));
+    return {...next,thumbnail:publicAssetUrl('/examples/petal-preview-front.png'),notes:[
       '粉色花瓣、橙黄花心 · 独立三维曲面。',
       '36 秒渐隐回环 · 主体、外围微流与细丝分层。',
       ...next.notes,
@@ -277,10 +276,9 @@ export default function App() {
     notify(referenceLook?'繁花星尘已就绪：粉色花瓣、黄色花蕊，36 秒晶亮颗粒渐蚀回环。':'花瓣微流已就绪：36 秒回环，1080p 真实画布；数量按设备自动调整。');
   });
   const loadDingDemo=()=>runImport('青铜方鼎.glb',async()=>{
-    const response=await fetch('/examples/ding-model.glb');
-    if(!response.ok)throw new Error('青铜方鼎读取失败，请重试或下载后导入 GLB。');
-    const next=await loadParticleAsset(new File([await response.blob()],'青铜方鼎.glb',{type:'model/gltf-binary'}));
-    return {...next,thumbnail:'/examples/ding-reference.jpg',notes:[
+    const blob=await loadExampleBlob(publicAssetUrl('/examples/ding-model.glb'),'青铜方鼎读取失败，请重试或下载后导入 GLB。');
+    const next=await loadParticleAsset(new File([blob],'青铜方鼎.glb',{type:'model/gltf-binary'}));
+    return {...next,thumbnail:publicAssetUrl('/examples/ding-reference.jpg'),notes:[
       '双耳、器身与四足 · 完整三维表面。',
       '青铜原色 · 拖动观察，空格暂停 / 播放。',
       ...next.notes,
@@ -293,9 +291,8 @@ export default function App() {
     setEffect('erosion');setClip(normalizeClip(DING_CLIP));notify('青铜方鼎已就绪：16 秒循环展示，空格暂停，拖动观察三维细节。');
   });
   const loadReferenceDemo=()=>runImport('粒子花朵参考.jpg',async()=>{
-    const response=await fetch('/examples/particle-flower-reference.jpg');
-    if(!response.ok)throw new Error('参考图片读取失败，请重新选择文件。');
-    return loadParticleAsset(new File([await response.blob()],'粒子花朵参考.jpg',{type:'image/jpeg'}));
+    const blob=await loadExampleBlob(publicAssetUrl('/examples/particle-flower-reference.jpg'),'参考图片读取失败，请重新选择文件。');
+    return loadParticleAsset(new File([blob],'粒子花朵参考.jpg',{type:'image/jpeg'}));
   },()=>{
     const e=engine.current;if(!e)return;
     const patch:Partial<ParticleParams>={autoCount:true,count:300000,colorMode:'original',size:1.7,opacity:.95,glow:.7,exposure:1.55,contrast:1.05,curl:1.8,sparkle:.35,spread:1.15,depth:1.35,scatter:.18,stagger:.5,turbulence:.18,motionSpeed:.55,playbackRate:1,erosion:.72,flowScale:1.2,stringiness:2.2,trail:.65,fade:true,direction:'y',autoRotate:false};
@@ -304,10 +301,9 @@ export default function App() {
     setEffect('erosion');setClip(normalizeClip(REFERENCE_CLIP));notify('已开启你的参考图展示：12 秒关键帧循环，空格暂停 / 播放。');
   });
   const loadLilyDemo=()=>runImport('彩色百合立体示例.glb',async()=>{
-    const response=await fetch('/examples/lily-model.glb');
-    if(!response.ok)throw new Error('百合模型读取失败，请重试或导入本地 GLB。');
-    const next=await loadParticleAsset(new File([await response.blob()],'彩色百合立体示例.glb',{type:'model/gltf-binary'}));
-    return {...next,thumbnail:'/examples/lily-reference.jpg',notes:[
+    const blob=await loadExampleBlob(publicAssetUrl('/examples/lily-model.glb'),'百合模型读取失败，请重试或导入本地 GLB。');
+    const next=await loadParticleAsset(new File([blob],'彩色百合立体示例.glb',{type:'model/gltf-binary'}));
+    return {...next,thumbnail:publicAssetUrl('/examples/lily-reference.jpg'),notes:[
       '参考照片制作的立体近似；背面与遮挡部分为补建。',
       '原图配色 · 独立花瓣、花蕊、花茎与叶片。',
       ...next.notes,
@@ -486,14 +482,14 @@ export default function App() {
       <button className={'drop-zone '+(dragging?'dragging':'')} disabled={activeRecording} onClick={()=>fileRef.current?.click()}>{importBusy?<LoaderCircle className="spin" size={31}/>:<Upload size={31}/>}<strong>{importBusy?'正在处理 '+importState.name:dragging?'松开以导入素材':'拖入图片或 GLB 模型'}</strong><span>{importBusy?'仍可选择其他文件，以最后一次选择为准':'或点击这里，从电脑选择文件'}</span><small>PNG · JPG · JPEG · GLB</small></button>
       {importState.status==='error'&&<div className="import-error" role="alert"><strong>未能导入 {importState.name}</strong><p>{importState.error}</p><small>原有素材已保留，可重新选择文件。</small></div>}
       <div className="import-formats"><div><Image size={18}/><b>图片</b><p>保留宽高比和原色。透明区域自动过滤；JPG 保留背景。</p></div><div><Box size={18}/><b>静态 3D 模型</b><p>GLB 多网格表面采样。支持基色、顶点色与基础色贴图。</p></div></div>
-      <div className="reference-example uploaded-example"><button disabled={activeRecording||importBusy} onClick={loadUploadedDemo}><img src="/examples/uploaded-model-preview.jpg" alt="用户提供的双朵百合三维模型"/><span><b>你的百合花束 · 导入模型预设</b><small>来自原始 GLB · 完整三维 / 原色 / 36 秒动画</small></span><Play size={17}/></button><a href="/examples/uploaded-model.glb" download="Lily_Bouquet.glb">下载网页优化 GLB <ArrowDownToLine size={13}/></a></div>
+      <div className="reference-example uploaded-example"><button disabled={activeRecording||importBusy} onClick={loadUploadedDemo}><img src={publicAssetUrl('/examples/uploaded-model-preview.jpg')} alt="用户提供的双朵百合三维模型"/><span><b>你的百合花束 · 导入模型预设</b><small>来自原始 GLB · 完整三维 / 原色 / 36 秒动画</small></span><Play size={17}/></button><a href={publicAssetUrl('/examples/uploaded-model.glb')} download="Lily_Bouquet.glb">下载网页优化 GLB <ArrowDownToLine size={13}/></a></div>
       <p className="import-capacity">GLB 支持最大 256 MiB / 500 万三角面，自动采样为粒子。</p>
-      <div className="example-heading"><span>先试试示例</span><small>无需准备文件</small></div><div className="example-grid"><div><button disabled={activeRecording} onClick={()=>example('/examples/color-flower.png','color-flower.png')}><img src="/examples/color-flower.png" alt="粉色花瓣与黄色花蕊的透明花朵"/><span><b>彩色花朵</b><small>透明 PNG / 原色粒子</small></span><ArrowUpRight size={17}/></button><a href="/examples/color-flower.png" download>下载图片 <ArrowDownToLine size={12}/></a></div><div><button disabled={activeRecording} onClick={()=>example('/examples/sample-sphere.glb','sample-sphere.glb')}><span className="model-example"><Box size={33}/></span><span><b>三维组合</b><small>GLB / 多网格与颜色</small></span><ArrowUpRight size={17}/></button><a href="/examples/sample-sphere.glb" download>下载模型 <ArrowDownToLine size={12}/></a></div></div>
-      <div className="reference-example lily-example"><button disabled={activeRecording||importBusy} onClick={loadWhiteLilyDemo}><img src="/examples/white-lily-preview-front.png" alt="参考照片制作的白百合立体近似"/><span><b>白百合 · 自然风蚀</b><small>白色花瓣 / 淡绿花心与棕色花药 / 36 秒渐隐回环</small></span><Play size={17}/></button><a href="/examples/white-lily-model.glb" download="Particle_White_Lily.glb">下载白百合 GLB 模型 <ArrowDownToLine size={13}/></a><a href="/examples/white-lily-reference.png" download="White_Lily_Reference.png">下载白百合参考图 <ArrowDownToLine size={13}/></a></div>
-      <div className="reference-example petal-example"><button disabled={activeRecording||importBusy} onClick={()=>loadPetalDemo()}><img src="/examples/petal-preview-front.png" alt="粉色花瓣和橙黄色花心的立体花朵"/><span><b>花瓣微流 · 立体花朵</b><small>三维表面 / 稀疏外围 / 36 秒渐隐回环</small></span><Play size={17}/></button><a href="/examples/petal-model.glb" download="Particle_Petal.glb">下载花瓣 GLB 模型 <ArrowDownToLine size={13}/></a></div>
-      <div className="reference-example ding-example"><button disabled={activeRecording||importBusy} onClick={loadDingDemo}><img src="/examples/ding-reference.jpg" alt="青铜方鼎正视参考图"/><span><b>青铜方鼎 · 三维粒子展示</b><small>青铜原色 / 四足双耳 / 16 秒聚散动画</small></span><Play size={17}/></button><a href="/examples/ding-model.glb" download="Bronze_Ding.glb">下载青铜方鼎 GLB <ArrowDownToLine size={13}/></a></div>
-      <div className="reference-example lily-example"><button disabled={activeRecording} onClick={loadLilyDemo}><img src="/examples/lily-reference.jpg" alt="用于彩色百合模型的参考照片"/><span><b>你的百合 · 彩色 3D 模型</b><small>参考照片的立体近似 · 原色 / 12 秒动画</small></span><Play size={17}/></button><a href="/examples/lily-model.glb" download="Particle_Lily.glb">下载彩色 GLB 模型 <ArrowDownToLine size={13}/></a></div>
-      <div className="reference-example"><button disabled={activeRecording} onClick={loadReferenceDemo}><img src="/examples/particle-flower-reference.jpg" alt="你提供的彩色流线花朵"/><span><b>你的参考图 · 图片展示</b><small>原色粒子 · 12 秒聚散 / 缩放 / 旋转动画</small></span><Play size={17}/></button></div>
+      <div className="example-heading"><span>先试试示例</span><small>无需准备文件</small></div><div className="example-grid"><div><button disabled={activeRecording} onClick={()=>example(publicAssetUrl('/examples/color-flower.png'),'color-flower.png')}><img src={publicAssetUrl('/examples/color-flower.png')} alt="粉色花瓣与黄色花蕊的透明花朵"/><span><b>彩色花朵</b><small>透明 PNG / 原色粒子</small></span><ArrowUpRight size={17}/></button><a href={publicAssetUrl('/examples/color-flower.png')} download>下载图片 <ArrowDownToLine size={12}/></a></div><div><button disabled={activeRecording} onClick={()=>example(publicAssetUrl('/examples/sample-sphere.glb'),'sample-sphere.glb')}><span className="model-example"><Box size={33}/></span><span><b>三维组合</b><small>GLB / 多网格与颜色</small></span><ArrowUpRight size={17}/></button><a href={publicAssetUrl('/examples/sample-sphere.glb')} download>下载模型 <ArrowDownToLine size={12}/></a></div></div>
+      <div className="reference-example lily-example"><button disabled={activeRecording||importBusy} onClick={loadWhiteLilyDemo}><img src={publicAssetUrl('/examples/white-lily-preview-front.png')} alt="参考照片制作的白百合立体近似"/><span><b>白百合 · 自然风蚀</b><small>白色花瓣 / 淡绿花心与棕色花药 / 36 秒渐隐回环</small></span><Play size={17}/></button><a href={publicAssetUrl('/examples/white-lily-model.glb')} download="Particle_White_Lily.glb">下载白百合 GLB 模型 <ArrowDownToLine size={13}/></a><a href={publicAssetUrl('/examples/white-lily-reference.png')} download="White_Lily_Reference.png">下载白百合参考图 <ArrowDownToLine size={13}/></a></div>
+      <div className="reference-example petal-example"><button disabled={activeRecording||importBusy} onClick={()=>loadPetalDemo()}><img src={publicAssetUrl('/examples/petal-preview-front.png')} alt="粉色花瓣和橙黄色花心的立体花朵"/><span><b>花瓣微流 · 立体花朵</b><small>三维表面 / 稀疏外围 / 36 秒渐隐回环</small></span><Play size={17}/></button><a href={publicAssetUrl('/examples/petal-model.glb')} download="Particle_Petal.glb">下载花瓣 GLB 模型 <ArrowDownToLine size={13}/></a></div>
+      <div className="reference-example ding-example"><button disabled={activeRecording||importBusy} onClick={loadDingDemo}><img src={publicAssetUrl('/examples/ding-reference.jpg')} alt="青铜方鼎正视参考图"/><span><b>青铜方鼎 · 三维粒子展示</b><small>青铜原色 / 四足双耳 / 16 秒聚散动画</small></span><Play size={17}/></button><a href={publicAssetUrl('/examples/ding-model.glb')} download="Bronze_Ding.glb">下载青铜方鼎 GLB <ArrowDownToLine size={13}/></a></div>
+      <div className="reference-example lily-example"><button disabled={activeRecording} onClick={loadLilyDemo}><img src={publicAssetUrl('/examples/lily-reference.jpg')} alt="用于彩色百合模型的参考照片"/><span><b>你的百合 · 彩色 3D 模型</b><small>参考照片的立体近似 · 原色 / 12 秒动画</small></span><Play size={17}/></button><a href={publicAssetUrl('/examples/lily-model.glb')} download="Particle_Lily.glb">下载彩色 GLB 模型 <ArrowDownToLine size={13}/></a></div>
+      <div className="reference-example"><button disabled={activeRecording} onClick={loadReferenceDemo}><img src={publicAssetUrl('/examples/particle-flower-reference.jpg')} alt="你提供的彩色流线花朵"/><span><b>你的参考图 · 图片展示</b><small>原色粒子 · 12 秒聚散 / 缩放 / 旋转动画</small></span><Play size={17}/></button></div>
       <div className="import-footer"><span>素材在浏览器本地处理</span><button disabled={activeRecording} onClick={()=>runImport('粒子球体',async()=>createSphereAsset())}><RotateCcw size={12}/>恢复内置球体</button></div>
     </section></div>}
     {help&&<div className="modal-backdrop" onClick={()=>setHelp(false)}><section className="modal help-modal" onClick={e=>e.stopPropagation()}><div className="modal-heading"><div><span className="eyebrow">QUICK START</span><h2>从素材到一段动画</h2></div><button className="icon-button" aria-label="关闭操作说明" onClick={()=>setHelp(false)}><X size={20}/></button></div><ol><li><b>导入素材</b><span>左上打开导入窗口，选择或拖入图片 / GLB，也可直接加载花朵或三维组合示例。</span></li><li><b>设计粒子变化</b><span>选择六种效果。右侧可调当前形态、侵蚀、拉丝、拖尾和淡出；原色模式保留素材颜色。</span></li><li><b>给变化打帧</b><span>拖动底部秒时间轴到目标位置，点击“添加关键帧”，编辑缩放、XYZ 旋转与聚散形态。修改会暂停，空格预览。</span></li><li><b>观察与记录</b><span>左键旋转相机，滚轮缩放，右键平移；R 重置视角。录制只包含画布，可预览并下载视频。</span></li></ol><p className="help-limit">图片是三维空间中的薄平面；模型支持静态表面。骨骼动画、Draco / KTX2 压缩数据和高级材质暂不支持。高清导出支持 1080p / 60 FPS 与 4K / 30 FPS；自由录制为 1080p / 目标 60 FPS。关键帧缩放与旋转作用于素材。</p><button className="primary" onClick={()=>setHelp(false)}>开始创作 <ArrowUpRight size={15}/></button></section></div>}
