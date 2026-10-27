@@ -39,6 +39,8 @@ export function createQaServer({ root = PROJECT_ROOT } = {}) {
       ...entry,
       plugins: [{ name: 'local-qa-root-imports', setup(build) {
         build.onResolve({ filter: /^\// }, args => {
+          // On Linux, esbuild's absolute file entry points also start with '/'.
+          if (args.kind === 'entry-point' && within(root, args.path)) return;
           if (args.path.startsWith('/artifacts/')) return { path: args.path, external: true };
           if (args.path.startsWith('/src/') || args.path.startsWith('/tests/')) {
             const path = resolve(root, '.' + args.path.split(/[?#]/)[0]);
