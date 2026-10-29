@@ -140,9 +140,9 @@ function createEnvironment() {
       return stream;
     },
   };
-  environment.createRecorder = () => new CanvasRecorder(
+  environment.createRecorder = (onUpdate = () => {}) => new CanvasRecorder(
     environment.canvas,
-    (state) => environment.updates.push(state),
+    (state) => { environment.updates.push(state); onUpdate(state); },
     (paused) => environment.pauseEvents.push(paused),
   );
   return environment;
@@ -156,6 +156,68 @@ function recorderTest(name, run) {
 }
 
 describe('CanvasRecorder 状态与资源回归', { concurrency: false }, () => {
+  recorderTest('开始和重新录制不会提前恢复预览尺寸，生成完成或取消后才恢复', (env) => {
+    env.targetFps = 60;
+    const previewSize = { width: 800, height: 450 };
+    const recorder = env.createRecorder(state => {
+      // The preview owner releases fixed capture dimensions on inactive states.
+      if (!['recording', 'paused', 'processing'].includes(state.status)) {
+        Object.assign(env.canvas, previewSize);
+      }
+    });
+    for (const [width, height] of [[1920, 1080], [1280, 720], [2560, 1440], [3840, 2160]]) {
+      Object.assign(env.canvas, { width, height });
+      const updatesBeforeStart = env.updates.length;
+      recorder.start('high', { width, height, fps: 60 });
+      assert.equal(recorder.state.status, 'recording', 'the prepared capture size must survive startup');
+      assert.deepEqual(env.updates.slice(updatesBeforeStart).map(state => state.status), ['recording']);
+      assert.equal(env.canvas.width, width);
+      assert.equal(env.canvas.height, height);
+      assert.equal(env.urls.size, 0, 'starting again releases the previous preview URL');
+      recorder.pause();
+      recorder.resume();
+      recorder.stop();
+      assert.equal(env.canvas.width, width, 'processing still owns the recording size');
+      env.encoders.at(-1).finish();
+      assert.equal(recorder.state.status, 'ready');
+      assert.equal(recorder.state.result.width, width);
+      assert.equal(recorder.state.result.height, height);
+      assert.equal(env.canvas.width, previewSize.width);
+      assert.equal(env.canvas.height, previewSize.height);
+    }
+    Object.assign(env.canvas, { width: 1920, height: 1080 });
+    recorder.start('high', { width: 1920, height: 1080, fps: 60 });
+    recorder.clear();
+    assert.equal(env.updates.at(-1).status, 'idle', 'explicit cancellation still notifies the preview owner');
+    assert.equal(env.canvas.width, previewSize.width);
+    assert.equal(env.canvas.height, previewSize.height);
+    assert.ok(env.streams.every(stream => stream.track.stopped));
+    assert.equal(env.urls.size, 0);
+    recorder.destroy();
+  });
+
+  recorderTest('开始录制失败会恢复预览，重新准备尺寸后可以重试', (env) => {
+    const recorder = env.createRecorder(state => {
+      if (!['recording', 'paused', 'processing'].includes(state.status)) {
+        env.canvas.width = 800;
+        env.canvas.height = 450;
+      }
+    });
+    Object.assign(env.canvas, { width: 1920, height: 1080 });
+    env.captureFailure = new DOMException('Tainted canvas', 'SecurityError');
+    recorder.start('high', { width: 1920, height: 1080 });
+    assert.equal(recorder.state.status, 'error');
+    assert.match(recorder.state.error, /跨域图片/);
+    assert.equal(env.canvas.width, 800);
+    assert.equal(env.canvas.height, 450);
+    env.captureFailure = null;
+    Object.assign(env.canvas, { width: 1920, height: 1080 });
+    recorder.start('high', { width: 1920, height: 1080 });
+    assert.equal(recorder.state.status, 'recording');
+    recorder.destroy();
+    assert.ok(env.streams.every(stream => stream.track.stopped));
+  });
+
   recorderTest('1080p60 targets manual requests at 60 FPS and reports the selected capture rate', (env) => {
     env.manualCapture = true;
     env.replace(globalThis, 'CanvasCaptureMediaStreamTrack', { prototype: { requestFrame() {} } });

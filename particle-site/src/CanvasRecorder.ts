@@ -152,7 +152,9 @@ export class CanvasRecorder {
     if (['recording', 'paused', 'processing'].includes(this.currentState.status)) {
       return;
     }
-    this.clear();
+    // Keep startup atomic: an idle update would let the preview owner restore
+    // its display dimensions before we validate and capture the prepared canvas.
+    this.reset();
     if (!this.supported) {
       this.patch({ status: 'error', error: '当前浏览器不支持画布视频录制，请使用最新版 Chrome 或 Edge。' });
       return;
@@ -300,6 +302,11 @@ export class CanvasRecorder {
   /** 清除结果；正在录制时调用会取消本次录制并释放资源。 */
   clear(): void {
     if (this.destroyed) return;
+    this.reset();
+    this.emit();
+  }
+
+  private reset(): void {
     ++this.runId;
     this.clearTimers();
     this.releasePauseHook();
@@ -312,7 +319,6 @@ export class CanvasRecorder {
     this.requestedFrames = 0;
     this.manualCapture = false;
     this.currentState = { status: 'idle', elapsed: 0, bytes: 0, result: null, error: null };
-    this.emit();
   }
 
   destroy(): void {
